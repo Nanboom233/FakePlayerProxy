@@ -1,0 +1,6 @@
+{"file": ".trellis/spec/backend/velocity-plugin.md", "reason": "Velocity decorated-SPKI construction, client-generated AES relay, Vanilla rejection, cipher ordering, plugin proof, and isolated server build contracts."}
+{"file": ".trellis/spec/frontend/fabric-client-mod.md", "reason": "Client-only Mixin contract for decorated-SPKI extraction, the sole target join, standard key-packet ACK, safety, and unsupported-server isolation."}
+{"file": ".trellis/spec/guides/cross-layer-thinking-guide.md", "reason": "Server Hello, direct authentication forwarding, and cipher ownership cross the client mod, Velocity, and backend."}
+{"file": ".trellis/tasks/06-12-fake-player-proxy-research/research/fabric-26.2.md", "reason": "Verified Fabric 26.2, Java, Loom, Loader, and MCProtocolLib coordinates."}
+{"file": ".trellis/tasks/06-12-fake-player-proxy-research/research/minecraft-1.20-26.2-spki-carrier-compatibility.md", "reason": "Verified all 23 release packet families, Java 17/21/25 provider behavior, capacity, and version-specific Mixin boundaries."}
+{"file": ".trellis/tasks/06-12-fake-player-proxy-research/vanilla-login-mapping-analysis.md", "reason": "Verified vanilla login packet order and authentication ownership evidence."}

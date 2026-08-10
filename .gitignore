@@ -1,5 +1,5 @@
-.agents
-.claude
-.codex
-.trellis
-AGENTS.md
+.gradle/
+build/
+run
+logs/
+.idea/

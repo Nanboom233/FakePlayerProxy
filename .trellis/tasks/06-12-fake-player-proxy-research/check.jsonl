@@ -1,0 +1,6 @@
+{"file": ".trellis/spec/backend/velocity-plugin.md", "reason": "Check patch scope, decorated-SPKI construction, client-generated AES relay, encrypted Vanilla rejection, cipher ordering, and server build entrypoints."}
+{"file": ".trellis/spec/frontend/fabric-client-mod.md", "reason": "Check decorated-SPKI detection, sole target join, standard ACK response, client-only Mixin safety, and unpatched-server isolation."}
+{"file": ".trellis/spec/guides/cross-layer-thinking-guide.md", "reason": "Check Server Hello, direct authentication forwarding, and cipher ownership across all connections."}
+{"file": ".trellis/tasks/06-12-fake-player-proxy-research/research/fabric-26.2.md", "reason": "Check pinned Minecraft, Java, Loader, and Loom coordinates against verified evidence."}
+{"file": ".trellis/tasks/06-12-fake-player-proxy-research/research/minecraft-1.20-26.2-spki-carrier-compatibility.md", "reason": "Check the 1.20-26.2 protocol matrix, Java 17/21/25 probes, provider caveat, and per-family hook differences."}
+{"file": ".trellis/tasks/06-12-fake-player-proxy-research/vanilla-login-mapping-analysis.md", "reason": "Check vanilla login packet order and authentication ownership evidence."}

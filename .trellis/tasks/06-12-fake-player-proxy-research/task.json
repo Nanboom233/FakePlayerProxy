@@ -1,0 +1,31 @@
+{
+  "id": "fake-player-proxy-research",
+  "name": "fake-player-proxy-research",
+  "title": "Replan FakePlayerProxy direct remote login relay",
+  "description": "Design a decorated-SPKI direct login relay with client-generated AES and verify Minecraft 1.20-26.2 / Java compatibility.",
+  "status": "in_progress",
+  "dev_type": "feature",
+  "scope": "proxy-relay",
+  "package": null,
+  "priority": "P2",
+  "creator": "FakePlayerProxy",
+  "assignee": "FakePlayerProxy",
+  "createdAt": "2026-06-12",
+  "completedAt": null,
+  "branch": null,
+  "base_branch": "master",
+  "worktree_path": null,
+  "commit": null,
+  "pr_url": null,
+  "subtasks": [],
+  "children": [],
+  "parent": null,
+  "relatedFiles": [
+    "plugin/",
+    "mod/",
+    ".trellis/spec/backend/velocity-plugin.md",
+    ".trellis/spec/frontend/fabric-client-mod.md"
+  ],
+  "notes": "",
+  "meta": {}
+}
