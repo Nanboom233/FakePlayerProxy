@@ -21,6 +21,7 @@ This directory contains guidelines for frontend development. Fill in each file w
 | [Quality Guidelines](./quality-guidelines.md) | Code standards, forbidden patterns | To fill |
 | [Type Safety](./type-safety.md) | Type patterns, validation | To fill |
 | [Fabric Client Mod](./fabric-client-mod.md) | Minecraft 26.2 client Mixin and relay contracts | Active |
+| [Java Language](../language/java.md) | Shared Java value-shape, method, Mixin annotation, i18n, and diagnostic conventions | Active |
 
 ---
 

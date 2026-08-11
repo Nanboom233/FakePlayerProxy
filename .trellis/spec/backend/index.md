@@ -20,6 +20,7 @@ This directory contains guidelines for backend development. Fill in each file wi
 | [Quality Guidelines](./quality-guidelines.md) | Code standards, forbidden patterns | To fill |
 | [Logging Guidelines](./logging-guidelines.md) | Structured logging, log levels | To fill |
 | [Velocity Plugin Contract](./velocity-plugin.md) | Runtime command/config/protocol contracts | Active |
+| [Java Language](../language/java.md) | Shared Java value-shape, method, Mixin annotation, i18n, and diagnostic conventions | Active |
 
 ---
 

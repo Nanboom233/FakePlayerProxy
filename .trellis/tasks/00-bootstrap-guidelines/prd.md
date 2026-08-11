@@ -33,21 +33,30 @@ are:
 
 - `.trellis/spec/backend/velocity-plugin.md`
 - `.trellis/spec/frontend/fabric-client-mod.md`
+- `.trellis/spec/language/java.md`
 
 The Fabric spec forbids `Objects.requireNonNull`, Java assertions, state
-assertions, and deliberately thrown validation exceptions in client mod code.
-Use `@NotNull` for the static contract plus an explicit null guard that returns
-a failure/no-op result. Catch mod-owned codec, payload, and asynchronous
-exceptions at their boundary so an unexpected input cannot terminate the game
-client.
+assertions, and deliberately thrown validation exceptions in client Mod code.
+Use `@NotNull` only on declarations whose inputs and contract this project owns
+and guarantees. Do not add it to foreign Mixin inputs, shadows, local captures,
+or override contracts. A shadow of a final target field still requires Mixin's
+`@Final`; avoid the shadow entirely when a suitable public API exists. Prefer
+named `@Local` captures and keep shadow method parameter names aligned with the
+target.
 
 When a caught exception represents a failure that needs later debugging, pass
 the `Throwable` to the logger so its complete stack trace and cause chain remain
 available. An expected exception may be intentionally ignored when the local
 catch completely handles its outcome and no diagnostic record is needed; do
 not require logging mechanically for every catch. Player-facing reported errors
-must use separate, concise, user-friendly components rather than raw exception
-text.
+must use i18n components rather than literals or raw exception text. Validation
+logs name the exact failed operation and condition; cleanup helpers do not take
+`null` in place of a real exception.
+
+For simple two- or three-value returns, first consider the module's existing
+`Pair` or `Triple` rather than creating a container interface. Extract a method
+only when the current body becomes easier to read or there is an existing reuse
+requirement. These are review conventions, not dedicated test requirements.
 
 ---
 

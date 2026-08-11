@@ -181,22 +181,24 @@ public static final String MINECRAFT_VERSION = "26.2";
 public static final int PROTOCOL_VERSION = 776;
 ```
 
-## Scenario: Velocity Server Hello and Direct Authentication Relay
+## Scenario: Velocity Server Hello, Transfer Fallback, And Direct Relay
 
 ### 1. Scope / Trigger
 
 - Trigger: `plugin/patch/` and the client-only `mod/` jointly extend the login
   flow through a modified Server Hello.
-- Scope: patched online-mode Velocity, a Minecraft 26.2 Fabric client, and an
-  online-mode target server.
-- Remote authentication is relayed through the ordinary login packets. The
-  client-generated AES secret lets Velocity decrypt and proxy the protected
-  frontend and backend streams.
+- Scope: patched online-mode Velocity, Minecraft 26.2 Vanilla and Fabric
+  clients, and one fixed online-mode target server.
+- An accepted Mod connection uses the direct packet relay. Its client-generated
+  AES secret lets Velocity decrypt and proxy both protected streams. A Vanilla
+  or declined Mod connection completes a short first login, reconnects through
+  Transfer, and uses an opaque raw tunnel for the target connection.
 
 ### 2. Signatures
 
-- Connection proof message: `[FakePlayerProxy] AES encryption/decryption verified.`
-  as one green clientbound system chat message.
+- Connection proof message: one green clientbound translatable system chat
+  component with key `fakeplayerproxy.message.encryption_verified`; its English
+  rendering is `[FakePlayerProxy] AES encryption/decryption verified.`.
 - Plugin hook: `FakePlayerProxyPlugin.onServerPostConnect(ServerPostConnectEvent)`.
 - IntelliJ IDEA exposes only `server/releaseJar` and `server/runServer`, invoking
   `:plugin:releaseJar` and `:plugin:runServer` respectively.
@@ -206,6 +208,14 @@ public static final int PROTOCOL_VERSION = 776;
   server ID, challenge, and `shouldAuthenticate` remain unchanged.
 - Mod acknowledgement plaintext:
   `FPPACK || 0x01 || originalTargetChallenge`.
+- Vanilla fallback entry: a second handshake with intent `TRANSFER` on the
+  existing public listener. The raw target is the first server in Velocity's
+  static `try` list.
+- Vanilla Transfer cooldown: four seconds after successful `PostLoginEvent`
+  handling, scheduled on the frontend connection event loop.
+- Raw bootstrap owners:
+  `TransferTunnelLoginSessionHandler` consumes one `ServerLoginPacket`, and
+  `RawTunnelForwardHandler` owns byte forwarding after codec removal.
 
 ### 3. Contracts
 
@@ -221,9 +231,15 @@ public static final int PROTOCOL_VERSION = 776;
 - Encode a JCA-parseable proxy SPKI whose RSA modulus/exponent match Velocity's
   private key and whose AlgorithmIdentifier OCTET STRING contains only protocol
   exact magic/version, target-key length, and target SPKI.
-- A vanilla client returns `RSA_proxy(K)` plus
+- A Vanilla or declined Mod client returns `RSA_proxy(K1)` plus
   `RSA_proxy(originalChallenge)`. After decrypting that valid response, install
-  frontend AES before sending the observable encrypted mod-required disconnect.
+  frontend AES, close the provisional backend, complete a short Login and enter
+  Configuration. After successful PostLogin handling, wait four seconds and
+  send Transfer to the same public gateway address.
+- The two target connections normally share one source IP. The fixed delay
+  covers Paper's default 4000-millisecond connection throttle. Run the delayed
+  action on the frontend event loop and suppress it when the frontend is closed.
+  Do not block a thread or add timer state, retries, or a delay configuration.
 - A supported Mod returns `RSA_proxy(K)` plus
   `RSA_proxy(FPPACK || 0x01 || originalChallenge)`. Validate the complete ACK
   and original challenge before continuing.
@@ -241,13 +257,28 @@ public static final int PROTOCOL_VERSION = 776;
 - Do not invoke the normal second `connectToInitialServer` path. Dynamic initial
   server redirection and later online-backend switching are outside this relay
   scope.
+- Handle the second `TRANSFER` handshake on the existing public listener before
+  Velocity's ordinary Transfer rejection. Resolve only the first static `try`
+  server and accept one standard Login Start packet.
+- Send the target a replacement handshake with intent `LOGIN`. Preserve the
+  client protocol version, host, and port, then send the unchanged Login Start
+  fields. Do not accept a client-selected target.
+- After the replacement handshake and Login Start are written, remove Minecraft
+  framing and packet codecs from both legs. Forward all later bytes in both
+  directions with Netty backpressure. The client and target alone know the
+  second connection's AES key.
+- Before raw handoff, report a stable Login error and log the complete diagnostic
+  exception. After handoff, close both channels on a write or channel failure;
+  do not inject a Velocity packet into opaque traffic.
 - `K` is used for packet encryption/decryption and proxying. It is not an
   authentication credential or a substitute for Mojang authentication.
 - Keep connection-proof injection in the Velocity plugin, not the core patch.
   `ServerPostConnectEvent` is emitted after the backend join has completed; its
   subscriber sends the proof once to that event's player.
 - Secrets are copied at thread boundaries, zeroed when discarded, never logged,
-  and cleared on disconnect.
+  and cleared on disconnect. Zero AES secret material and its copies. Public
+  keys, challenges, acknowledgements, and response-classification bytes are
+  public protocol metadata; release them by dropping the owning reference.
 - The fixed Velocity checkout is reference source only. Patch application and the
   nested Velocity build occur in disposable `plugin/build/server/source/`.
 - `releaseJar` must be repeatable on Windows: clear read-only attributes inside
@@ -255,25 +286,42 @@ public static final int PROTOCOL_VERSION = 776;
   before cloning. Never clean or modify a reference checkout.
 - `runServer` uses `plugin/run/` as its working directory and deploys the current
   plugin jar to `plugin/run/plugins/` before launch.
+- Reuse Velocity's existing translatable `ConnectionMessages` components for
+  player-visible patch failures. The Mod-owned proof message uses the Mod's
+  translation resources. Do not introduce hard-coded player-visible patch or
+  proof text.
 - Minecraft 26.2 uses official names; do not add a mappings dependency or Fabric API.
 - Keep the Velocity patch minimal. Each changed file and each hunk must implement
   an approved protocol or lifecycle requirement. Remove unrelated formatting,
   import churn, duplicated logic, and speculative fallback paths.
+- Prefer newer Java language features and standard-library APIs when they make
+  the patch code more concise, readable, or performant.
 - Reuse an existing Velocity API or handler when it provides the required
   behavior. Do not replace a complete method or lifecycle handler when a narrow
   change can preserve the original flow.
 - Do not add a helper, accessor, constructor, or state field unless a required
   patch path cannot use an existing Velocity surface.
-- `LoginSessionHandler` owns one `RelayState` for the ordered backend relay:
-  `AWAITING_HELLO`, `HELLO_FORWARDED`, `RESPONSE_WRITE_PENDING`,
-  `BACKEND_ENCRYPTED`, `LOGIN_SUCCEEDED`, and `CONFIGURATION_RESUMED`.
-- Each backend relay event accepts only its exact predecessor. Any failure moves
-  the handler to terminal `FAILED`. A late callback must not enable encryption.
-- Do not represent this ordered relay with independent boolean fields. Separate
-  flags permit impossible combinations and hide the valid transition order.
+- Do not add a second phase enum to `LoginSessionHandler`. One
+  `TargetHello(publicKey, challenge)` record owns the pending Server Hello, and
+  the response `ChannelFuture` owns the later plaintext-write boundary.
+- Validate later handoffs with the active handler, successful response future,
+  installed cipher pipeline, paused auto-read state, and incomplete connection
+  result. A late callback must not enable encryption after ownership changes.
+- Do not represent relay phases with independent boolean fields. Use the
+  lifecycle objects that already own each asynchronous boundary.
+- `AuthSessionHandler` selects one construction-time continuation:
+  `InitialServer`, `Relay(player, backend, targetSessionId)`, or
+  `Transfer(player)`. Use exhaustive variants instead of independent nullable
+  fields and a transfer boolean. These variants select the action after Login;
+  they are not temporal protocol phases or a destination-mapping layer.
 - Combine successful `PostLoginEvent` completion and the first client settings
-  packet with `CompletableFuture`. Future completion is the one-shot guard.
-  Do not add a separate configuration-started boolean.
+  packet with `CompletableFuture`. Run the combined connection mutation on the
+  frontend event loop because a Plugin can complete its event future from
+  another thread. Future completion is the one-shot guard; do not add a separate
+  configuration-started boolean.
+- After raw handoff, pass an accepted inbound `ByteBuf` directly to the peer
+  write. The source handler no longer needs that reference, so the peer write
+  takes ownership. Release locally only when input is rejected before transfer.
 - Comments are part of the patch design. They must explain the relay to a reader
   who does not know the task history.
 - Each changed class explains its place in the complete connection flow. It
@@ -286,24 +334,29 @@ public static final int PROTOCOL_VERSION = 776;
   Comments must connect the frontend and backend stages into one readable flow.
 - Write comments in ASD-STE100 Simplified Technical English. STE controls the
   wording. It does not replace the technical explanation.
-- A comment can cite the applicable research file under
-  `.trellis/tasks/06-12-fake-player-proxy-research/research/`. The local comment
-  still states the verified behavior that the code uses.
+- A comment can cite an applicable task research file, including
+  `.trellis/tasks/08-10-client-login-negotiation-research/research/paper-connection-throttle.md`.
+  The local comment still states the verified behavior that the code uses.
 
 ### 4. Validation & Error Matrix
 
 | Condition | Result |
 | --- | --- |
 | Backend public key exceeds the old 256-byte bound but is within the new verified bound | Decode and preserve it for the decorated carrier |
-| Decrypted challenge equals the exact original challenge | Treat as Vanilla, install frontend AES, then send the specified encrypted rejection |
+| Decrypted challenge equals the exact original challenge | Treat as Vanilla, install frontend AES, close the provisional backend, complete the short Login, and Transfer to the same gateway |
 | Decrypted challenge equals exact `FPPACK || 0x01 || originalChallenge` | Continue the target login relay |
 | Decrypted secret, challenge, envelope, or target key is invalid | Close the owning connection with a user-friendly error and retain diagnostic exceptions in logs |
 | Target key response write fails | Close the in-flight connection without enabling backend AES |
-| A backend relay event does not match the current `RelayState` | Enter `FAILED` and close the in-flight relay |
-| A response write callback completes after `FAILED` | Clear its temporary secret and do not enable backend AES |
+| A backend relay event does not match its field, handler, pipeline, or future owner | Close the in-flight relay while that handler still owns it |
+| A response write callback completes after handler ownership changes | Clear its temporary secret and do not enable backend AES |
 | Target sends Login Success before a valid relayed key response | Close both pending legs as a protocol-state failure |
 | PostLogin handling or client settings is still pending | Keep backend reads paused until both are complete |
 | A second client settings packet completes the same future | Ignore the duplicate completion and resume the target only once |
+| Vanilla or declined Mod PostLogin completes | Wait four seconds on the frontend event loop, then send Transfer if the frontend remains open |
+| Second handshake has intent `TRANSFER` | Resolve the first static `try` target and install the raw Login bootstrap handler |
+| Raw bootstrap receives Login Start | Send a `LOGIN` handshake and unchanged Login Start fields, then remove codecs and forward bytes |
+| Raw bootstrap fails before handoff | Send a stable Login disconnect and close both legs; log a diagnostic failure with its complete `Throwable` |
+| Either raw leg closes or a raw write fails after handoff | Close both channels without injecting a Minecraft packet |
 | Re-running `releaseJar` with a previous disposable checkout present | Remove the complete generated checkout, then clone, apply, and build from the stored patch |
 | `ServerPostConnectEvent` in the plugin | Send the connection proof once to the connected player |
 | Connection owning relay state ends | Clear target key/challenge and temporary `K` state |
@@ -314,18 +367,24 @@ public static final int PROTOCOL_VERSION = 776;
 - Good: a modded 26.2 client generates `K`, authenticates once using the target
   key, returns the acknowledged standard response to Velocity, reaches the
   target, and sees one connection proof message.
-- Good: one enum exposes every valid backend relay transition, and one future
-  barrier joins the two configuration prerequisites.
+- Good: a Vanilla or declined Mod client completes the short encrypted login,
+  waits through Paper's default throttle window, follows Transfer to the same
+  listener, and reaches the fixed target through an opaque raw tunnel.
+- Good: existing handler, write-future, pipeline, and connection ownership guard
+  the relay, and one future barrier joins the two configuration prerequisites.
 - Base: the mod connects to an unpatched server; login bytes and behavior remain vanilla.
-- Bad: a vanilla client is dropped before frontend AES is installed and cannot
-  observe the rejection, or Velocity performs a Mojang join on the client's
-  behalf.
+- Bad: a Vanilla client is dropped after classification instead of receiving
+  Transfer, or Velocity performs a Mojang join on the client's behalf.
+- Bad: the raw tunnel accepts a client-selected target, opens a second listener,
+  or keeps packet decoders active after the handoff.
 - Bad: client settings resume backend reads while an asynchronous PostLogin
   listener is still running.
 - Bad: independent boolean fields describe relay phases or manually join
   PostLogin completion with client settings.
 - Bad: the patch replaces a complete Velocity method, adds a parallel state
   machine, or adds a utility for behavior that an existing Velocity API provides.
+- Bad: Transfer is sent immediately, a thread sleeps for the cooldown, or timer
+  state and retry parsing duplicate the existing future and connection lifecycle.
 - Bad: the code has local comments, but a reader cannot follow the full relay from
   the target Hello to target configuration.
 
@@ -340,14 +399,21 @@ public static final int PROTOCOL_VERSION = 776;
   Do not use source/patch text checks, private-field reflection, task-graph
   inspection, constant-only checks, or class-presence checks as relay coverage.
 - Verify cipher ordering and relay lifecycle through the real connection flow,
-  rather than duplicating the state machine in test-only code.
-- Do not add reflection or source-text tests for the enum or future barrier.
+  rather than duplicating lifecycle ownership in test-only code.
+- Exercise the production raw entry with framed Handshake and Login Start input.
+  Assert the rewritten intent, unchanged handshake and Login Start fields, exact
+  bytes in both directions, close propagation, and target-connect failure.
+- Do not add reflection or source-text tests for lifecycle fields or the future barrier.
   Focused compile and Checkstyle cover this behavior-preserving refactor.
+- Do not add a dedicated unit test for the fixed delay or executor selection.
+  Verify the observable interval and absence of Paper's throttle disconnect in
+  the focused Vanilla live check.
 - Build only the affected mod and pinned Velocity modules after narrow changes,
   then run `:plugin:releaseJar` to apply and compile the stored patch in the
   disposable server source directory.
-- Live-test the Vanilla rejection, the supported online-backend connection and
-  single proof message, and the Mod connection to an unpatched server.
+- Live-test the Vanilla Transfer/raw fallback, accepted Mod online-backend
+  connection and single proof message, declined Mod fallback, Escape behavior,
+  and the Mod connection to an unpatched server.
 - Do not repeat full-scope checks for an equivalent narrow edit.
 
 ### 7. Wrong vs Correct
@@ -394,19 +460,22 @@ private boolean relayLoginSucceeded;
 
 These flags permit combinations that do not describe a valid protocol stage.
 
-#### Correct: One Ordered Relay State
+#### Correct: Existing Lifecycle Ownership
 
 ```java
-private RelayState relayState = RelayState.AWAITING_HELLO;
-
-if (relayState != RelayState.HELLO_FORWARDED) {
-  failRelay(reason, null);
+if (backend.getActiveSessionHandler() != this
+    || responseWrite == null
+    || !responseWrite.isSuccess()) {
+  logger.error("Cannot enable backend encryption: response write no longer owns the active relay");
+  failRelay(reason);
   return;
 }
-relayState = RelayState.RESPONSE_WRITE_PENDING;
 ```
 
-One state value documents the valid predecessor and the next stage.
+The handler and write future already identify the valid owner and completed boundary.
+Validation failures log their concrete condition; the cleanup helper does not take
+a nullable exception placeholder. A real caught exception is passed to the logger
+as a `Throwable`.
 
 #### Wrong: Manual Asynchronous Gate
 
@@ -420,12 +489,13 @@ if (postLoginDone && settingsReceived && !configurationStarted) {
 #### Correct: One-Shot Future Barrier
 
 ```java
-postLoginFuture.thenCombine(settingsFuture, (ignored, settings) -> settings)
-    .thenAccept(this::resumeTarget);
+postLoginFuture.thenAcceptBothAsync(settingsFuture,
+    (ignored, settings) -> resumeTarget(settings), frontend.eventLoop());
 ```
 
 The first settings completion and successful PostLogin completion resume the
-target once, regardless of their completion order.
+target once, regardless of their completion order, and the connection mutation
+runs on its owning event loop.
 
 #### Wrong: Comment Without Context
 
