@@ -1,0 +1,9 @@
+{
+  "fakeplayerproxy.consent.title": "允许代理连接？",
+  "fakeplayerproxy.consent.body": "该服务器请求代理你的连接。允许后，服务器可以解密、查看和修改本次连接中传输的游戏数据。服务器地址：%s。你的 Minecraft 访问令牌不会发送给服务器。拒绝后，客户端将使用标准 Minecraft 加密，服务器仅透明转发后续加密的 TCP 流量。",
+  "fakeplayerproxy.consent.warning": "请仅在信任的服务器上允许代理！",
+  "fakeplayerproxy.consent.allow": "允许",
+  "fakeplayerproxy.consent.decline": "拒绝",
+  "fakeplayerproxy.disconnect.proxy_connection_failed": "无法继续代理连接，请重试。",
+  "fakeplayerproxy.message.encryption_verified": "[FakePlayerProxy] AES 加密/解密验证成功。"
+}

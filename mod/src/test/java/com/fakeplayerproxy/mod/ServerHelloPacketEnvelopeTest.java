@@ -2,8 +2,6 @@ package com.fakeplayerproxy.mod;
 
 import static org.junit.jupiter.api.Assertions.assertArrayEquals;
 import static org.junit.jupiter.api.Assertions.assertEquals;
-import static org.junit.jupiter.api.Assertions.assertNotNull;
-import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import com.fakeplayerproxy.mod.packets.ServerHelloPacketEnvelope;
@@ -35,11 +33,9 @@ final class ServerHelloPacketEnvelopeTest {
 
     @Test
     void ordinaryRsaKeyPassesThrough() {
-        ServerHelloPacketEnvelope.Inspection inspection =
-                ServerHelloPacketEnvelope.inspect(proxyKeyPair.getPublic());
-
-        assertEquals(ServerHelloPacketEnvelope.Status.PASSTHROUGH, inspection.status());
-        assertNull(inspection.targetPublicKey());
+        assertTrue(ServerHelloPacketEnvelope
+                .decodeTargetPublicKey(proxyKeyPair.getPublic())
+                .isEmpty());
     }
 
     @Test
@@ -49,19 +45,17 @@ final class ServerHelloPacketEnvelopeTest {
         PublicKey parsedProxyKey = KeyFactory.getInstance("RSA")
                 .generatePublic(new X509EncodedKeySpec(decorated));
 
-        ServerHelloPacketEnvelope.Inspection inspection =
-                ServerHelloPacketEnvelope.inspect(parsedProxyKey);
+        PublicKey targetPublicKey = ServerHelloPacketEnvelope
+                .decodeTargetPublicKey(parsedProxyKey)
+                .orElseThrow();
 
         assertArrayEquals(decorated, parsedProxyKey.getEncoded());
-        assertEquals(ServerHelloPacketEnvelope.Status.SUPPORTED, inspection.status());
-        PublicKey targetPublicKey = inspection.targetPublicKey();
-        assertNotNull(targetPublicKey);
         assertArrayEquals(
                 targetKeyPair.getPublic().getEncoded(), targetPublicKey.getEncoded());
     }
 
     @Test
-    void malformedRecognizedEnvelopeReturnsInvalidResult() throws Exception {
+    void malformedRecognizedEnvelopeReturnsEmptyResult() throws Exception {
         byte[] malformedEnvelope = envelope(targetKeyPair.getPublic().getEncoded());
         malformedEnvelope[6] = 2;
         byte[] decorated = decorateWithEnvelope(
@@ -69,11 +63,9 @@ final class ServerHelloPacketEnvelopeTest {
         PublicKey parsedProxyKey = KeyFactory.getInstance("RSA")
                 .generatePublic(new X509EncodedKeySpec(decorated));
 
-        ServerHelloPacketEnvelope.Inspection inspection =
-                ServerHelloPacketEnvelope.inspect(parsedProxyKey);
-
-        assertEquals(ServerHelloPacketEnvelope.Status.INVALID, inspection.status());
-        assertNull(inspection.targetPublicKey());
+        assertTrue(ServerHelloPacketEnvelope
+                .decodeTargetPublicKey(parsedProxyKey)
+                .isEmpty());
     }
 
     @Test

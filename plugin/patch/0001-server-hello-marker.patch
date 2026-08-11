@@ -1,8 +1,17 @@
 diff --git a/proxy/src/main/java/com/velocitypowered/proxy/connection/backend/LoginSessionHandler.java b/proxy/src/main/java/com/velocitypowered/proxy/connection/backend/LoginSessionHandler.java
-index 14884af4..67240b11 100644
+index 14884af4670fe30b00ee580ea3d65fc7f6056068..13e6075cc2046decd5213d10af60505e8b5f9019 100644
 --- a/proxy/src/main/java/com/velocitypowered/proxy/connection/backend/LoginSessionHandler.java
 +++ b/proxy/src/main/java/com/velocitypowered/proxy/connection/backend/LoginSessionHandler.java
-@@ -22,6 +22,7 @@ import com.velocitypowered.api.event.player.ServerLoginPluginMessageEvent;
+@@ -17,11 +17,14 @@
+-
++
+ package com.velocitypowered.proxy.connection.backend;
+-
++
++import static com.velocitypowered.proxy.network.Connections.CIPHER_DECODER;
++
+ import com.velocitypowered.api.event.player.CookieRequestEvent;
+ import com.velocitypowered.api.event.player.ServerLoginPluginMessageEvent;
  import com.velocitypowered.api.event.player.configuration.PlayerEnteredConfigurationEvent;
  import com.velocitypowered.api.network.ProtocolVersion;
  import com.velocitypowered.api.proxy.messages.MinecraftChannelIdentifier;
@@ -10,7 +19,7 @@ index 14884af4..67240b11 100644
  import com.velocitypowered.proxy.VelocityServer;
  import com.velocitypowered.proxy.config.PlayerInfoForwarding;
  import com.velocitypowered.proxy.config.VelocityConfiguration;
-@@ -30,22 +31,33 @@ import com.velocitypowered.proxy.connection.MinecraftSessionHandler;
+@@ -30,22 +33,33 @@ import com.velocitypowered.proxy.connection.MinecraftSessionHandler;
  import com.velocitypowered.proxy.connection.PlayerDataForwarding;
  import com.velocitypowered.proxy.connection.client.ClientPlaySessionHandler;
  import com.velocitypowered.proxy.connection.client.ConnectedPlayer;
@@ -44,8 +53,8 @@ index 14884af4..67240b11 100644
  import java.util.concurrent.CompletableFuture;
  import net.kyori.adventure.key.Key;
  import net.kyori.adventure.text.Component;
-@@ -54,6 +66,22 @@ import org.apache.logging.log4j.Logger;
- 
+@@ -54,6 +68,22 @@ import org.apache.logging.log4j.Logger;
+
  /**
   * Handles a player trying to log into the proxy.
 + *
@@ -62,73 +71,148 @@ index 14884af4..67240b11 100644
 + * after PostLogin and client settings are complete.
 + *
 + * <p>A backend connection outside this initial relay keeps the original Velocity
-+ * behavior. This limit prevents the relay state from changing normal server
++ * behavior. This limit prevents relay data from changing normal server
 + * switches or offline backend logins.
   */
  public class LoginSessionHandler implements MinecraftSessionHandler {
- 
-@@ -66,6 +94,10 @@ public class LoginSessionHandler implements MinecraftSessionHandler {
+
+@@ -66,6 +96,10 @@ public class LoginSessionHandler implements MinecraftSessionHandler {
    private final VelocityServerConnection serverConn;
    private final CompletableFuture<Impl> resultFuture;
    private boolean informationForwarded;
-+  // The backend event loop owns every relay state transition.
-+  private RelayState relayState = RelayState.AWAITING_HELLO;
-+  private byte[] targetPublicKey;
-+  private byte[] targetChallenge;
- 
++  // The target Hello owns its public metadata until the plaintext response takes ownership.
++  private TargetHello targetHello;
++  // This future owns the response boundary until the handler enters Configuration.
++  private ChannelFuture relayResponseWrite;
+
    LoginSessionHandler(VelocityServer server, VelocityServerConnection serverConn,
        CompletableFuture<Impl> resultFuture) {
-@@ -76,6 +108,20 @@ public class LoginSessionHandler implements MinecraftSessionHandler {
- 
+@@ -76,6 +110,35 @@ public class LoginSessionHandler implements MinecraftSessionHandler {
+
    @Override
    public boolean handle(EncryptionRequestPacket packet) {
 +    MinecraftConnection frontend = serverConn.getPlayer().getConnection();
 +    // Only the provisional initial login can relay an online target Server Hello.
 +    if (frontend.getActiveSessionHandler() instanceof InitialLoginSessionHandler handler) {
-+      if (relayState != RelayState.AWAITING_HELLO) {
-+        failRelay(ConnectionMessages.INTERNAL_SERVER_CONNECTION_ERROR, null);
++      if (resultFuture.isDone()) {
++        logger.error(
++            "Cannot accept target Server Hello for {}: backend result is already complete",
++            serverConn.getPlayer());
++        disconnectRelay();
++        return true;
++      }
++      if (relayResponseWrite != null) {
++        logger.error(
++            "Cannot accept target Server Hello for {}: a relay response write already exists",
++            serverConn.getPlayer());
++        disconnectRelay();
++        return true;
++      }
++      if (targetHello != null) {
++        logger.error(
++            "Cannot accept target Server Hello for {}: a pending target Hello already exists",
++            serverConn.getPlayer());
++        disconnectRelay();
 +        return true;
 +      }
 +
-+      this.targetPublicKey = packet.getPublicKey();
-+      this.targetChallenge = packet.getVerifyToken();
-+      this.relayState = RelayState.HELLO_FORWARDED;
++      this.targetHello = new TargetHello(packet.getPublicKey(), packet.getVerifyToken());
 +      handler.handleBackendEncryptionRequest(serverConn, packet);
 +      return true;
 +    }
      throw new IllegalStateException("Backend server is online-mode!");
    }
- 
-@@ -130,6 +176,8 @@ public class LoginSessionHandler implements MinecraftSessionHandler {
- 
+
+@@ -130,6 +193,8 @@ public class LoginSessionHandler implements MinecraftSessionHandler {
+
    @Override
    public boolean handle(DisconnectPacket packet) {
-+    relayState = RelayState.FAILED;
++    relayResponseWrite = null;
 +    clearTargetHello();
      resultFuture.complete(ConnectionRequestResults.forDisconnect(packet, serverConn.getServer()));
      serverConn.disconnect();
      return true;
-@@ -144,11 +192,39 @@ public class LoginSessionHandler implements MinecraftSessionHandler {
+@@ -144,11 +209,101 @@ public class LoginSessionHandler implements MinecraftSessionHandler {
    @Override
    public boolean handle(ServerLoginSuccessPacket packet) {
      if (server.getConfiguration().getPlayerInfoForwardingMode() == PlayerInfoForwarding.MODERN && !informationForwarded) {
-+      relayState = RelayState.FAILED;
++      relayResponseWrite = null;
++      clearTargetHello();
        resultFuture.complete(ConnectionRequestResults.forDisconnect(MODERN_IP_FORWARDING_FAILURE, serverConn.getServer()));
        serverConn.disconnect();
        return true;
      }
- 
+
 +    MinecraftConnection frontend = serverConn.getPlayer().getConnection();
 +    if (frontend.getActiveSessionHandler() instanceof InitialLoginSessionHandler handler) {
-+      if (relayState != RelayState.BACKEND_ENCRYPTED) {
-+        failRelay(ConnectionMessages.INTERNAL_SERVER_CONNECTION_ERROR, null);
++      final MinecraftConnection backend = serverConn.ensureConnected();
++      ChannelFuture responseWrite = relayResponseWrite;
++      if (resultFuture.isDone()) {
++        logger.error(
++            "Cannot accept target Login Success for {}: backend result is already complete",
++            serverConn.getPlayer());
++        disconnectRelay();
++        return true;
++      }
++      if (responseWrite == null) {
++        logger.error(
++            "Cannot accept target Login Success for {}: relay response write is absent",
++            serverConn.getPlayer());
++        disconnectRelay();
++        return true;
++      }
++      if (!responseWrite.isSuccess()) {
++        Throwable cause = responseWrite.cause();
++        if (cause == null) {
++          logger.error(
++              "Cannot accept target Login Success for {}: relay response write state is {}",
++              serverConn.getPlayer(), responseWrite);
++        } else {
++          logger.error(
++              "Cannot accept target Login Success: relay response write failed for {}",
++              serverConn.getPlayer(), cause);
++        }
++        disconnectRelay();
++        return true;
++      }
++      if (targetHello != null) {
++        logger.error(
++            "Cannot accept target Login Success for {}: pending target Hello was not released",
++            serverConn.getPlayer());
++        disconnectRelay();
++        return true;
++      }
++      if (backend.getActiveSessionHandler() != this) {
++        MinecraftSessionHandler activeHandler = backend.getActiveSessionHandler();
++        logger.error(
++            "Cannot accept target Login Success for {}: active backend handler is {}",
++            serverConn.getPlayer(),
++            activeHandler == null ? "absent" : activeHandler.getClass().getName());
++        disconnectRelay();
++        return true;
++      }
++      if (backend.getChannel().pipeline().context(CIPHER_DECODER) == null) {
++        logger.error(
++            "Cannot accept target Login Success for {}: backend cipher decoder is absent",
++            serverConn.getPlayer());
++        disconnectRelay();
 +        return true;
 +      }
 +
 +      List<GameProfile.Property> properties = packet.getProperties();
 +      UUID sessionId = packet.getSessionId();
-+      if (properties == null || sessionId == null) {
-+        failRelay(ConnectionMessages.INTERNAL_SERVER_CONNECTION_ERROR, null);
++      if (properties == null) {
++        logger.error(
++            "Cannot accept target Login Success for {}: profile properties are absent",
++            serverConn.getPlayer());
++        disconnectRelay();
++        return true;
++      }
++      if (sessionId == null) {
++        logger.error(
++            "Cannot accept target Login Success for {}: Minecraft 26.2 session ID is absent",
++            serverConn.getPlayer());
++        disconnectRelay();
 +        return true;
 +      }
 +
@@ -136,19 +220,21 @@ index 14884af4..67240b11 100644
 +        GameProfile profile = new GameProfile(
 +            packet.getUuid(), packet.getUsername(), properties);
 +        // Stop target configuration until the frontend owns this authenticated identity.
-+        serverConn.ensureConnected().setAutoReading(false);
-+        relayState = RelayState.LOGIN_SUCCEEDED;
++        backend.setAutoReading(false);
 +        handler.handleBackendLoginSuccess(serverConn, profile, sessionId);
 +      } catch (RuntimeException exception) {
-+        failRelay(ConnectionMessages.INTERNAL_SERVER_CONNECTION_ERROR, exception);
++        logger.error(
++            "Cannot hand target Login Success to the frontend relay for {}",
++            serverConn.getPlayer(), exception);
++        disconnectRelay();
 +      }
 +      return true;
 +    }
 +
      // The player has been logged on to the backend server, but we're not done yet. There could be
      // other problems that could arise before we get a JoinGame packet from the server.
- 
-@@ -195,13 +271,148 @@ public class LoginSessionHandler implements MinecraftSessionHandler {
+
+@@ -195,13 +350,242 @@ public class LoginSessionHandler implements MinecraftSessionHandler {
      return true;
    }
  
@@ -170,46 +256,118 @@ index 14884af4..67240b11 100644
 +   * @param secret a temporary copy of the client-generated AES key
 +   */
 +  public void completeRelayKeyResponse(byte[] secret) {
++    if (secret == null) {
++      logger.error("Cannot build target key response: frontend AES secret is absent");
++      disconnectRelay();
++      return;
++    }
++    if (secret.length != 16) {
++      logger.error(
++          "Cannot build target key response: frontend AES secret is {} bytes; expected 16",
++          secret.length);
++      Arrays.fill(secret, (byte) 0);
++      disconnectRelay();
++      return;
++    }
++
 +    try {
 +      MinecraftConnection backend = serverConn.ensureConnected();
-+      if (!backend.eventLoop().inEventLoop()
-+          || relayState != RelayState.HELLO_FORWARDED
-+          || targetPublicKey == null
-+          || targetChallenge == null) {
++      final TargetHello hello = targetHello;
++      if (!backend.eventLoop().inEventLoop()) {
++        logger.error("Cannot build target key response: caller is outside the backend event loop");
 +        Arrays.fill(secret, (byte) 0);
-+        failRelay(ConnectionMessages.INTERNAL_SERVER_CONNECTION_ERROR, null);
++        disconnectRelay();
++        return;
++      }
++      if (resultFuture.isDone()) {
++        logger.error("Cannot build target key response: backend result is already complete");
++        Arrays.fill(secret, (byte) 0);
++        disconnectRelay();
++        return;
++      }
++      if (backend.getActiveSessionHandler() != this) {
++        MinecraftSessionHandler activeHandler = backend.getActiveSessionHandler();
++        logger.error(
++            "Cannot build target key response: active backend handler is {}",
++            activeHandler == null ? "absent" : activeHandler.getClass().getName());
++        Arrays.fill(secret, (byte) 0);
++        disconnectRelay();
++        return;
++      }
++      if (relayResponseWrite != null) {
++        logger.error("Cannot build target key response: relay response write already exists");
++        Arrays.fill(secret, (byte) 0);
++        disconnectRelay();
++        return;
++      }
++      if (hello == null) {
++        logger.error("Cannot build target key response: pending target Hello is absent");
++        Arrays.fill(secret, (byte) 0);
++        disconnectRelay();
 +        return;
 +      }
 +
 +      PublicKey targetKey = com.velocitypowered.proxy.crypto.EncryptionUtils
-+          .parseRsaPublicKey(targetPublicKey);
++          .parseRsaPublicKey(hello.publicKey());
 +      EncryptionResponsePacket response = new EncryptionResponsePacket(
 +          FakePlayerProxyRelay.encryptRsa(targetKey, secret),
-+          FakePlayerProxyRelay.encryptRsa(targetKey, targetChallenge));
-+      // The response now owns all target data needed for the write.
-+      clearTargetHello();
-+      relayState = RelayState.RESPONSE_WRITE_PENDING;
++          FakePlayerProxyRelay.encryptRsa(targetKey, hello.challenge()));
 +
 +      // Wait for the plaintext write. This keeps the first encrypted target packet readable.
 +      ChannelFuture write = backend.write(response);
++      if (write == null) {
++        logger.error("Cannot send target key response: backend write returned no future");
++        Arrays.fill(secret, (byte) 0);
++        disconnectRelay();
++        return;
++      }
++      // The write future now owns the response boundary, so the pending Hello can be released.
++      clearTargetHello();
++      this.relayResponseWrite = write;
 +      write.addListener(future -> {
 +        try {
-+          if (!future.isSuccess()
-+              || relayState != RelayState.RESPONSE_WRITE_PENDING) {
-+            failRelay(ConnectionMessages.INTERNAL_SERVER_CONNECTION_ERROR, future.cause());
++          if (!future.isSuccess()) {
++            Throwable cause = future.cause();
++            if (cause == null) {
++              logger.error("Cannot send target key response: backend write failed without a cause");
++            } else {
++              logger.error("Cannot send target key response to the backend", cause);
++            }
++            disconnectRelay();
++            return;
++          }
++          if (resultFuture.isDone()) {
++            logger.error(
++                "Cannot enable backend encryption: backend result completed during response write");
++            disconnectRelay();
++            return;
++          }
++          if (backend.getActiveSessionHandler() != this) {
++            MinecraftSessionHandler activeHandler = backend.getActiveSessionHandler();
++            logger.error(
++                "Cannot enable backend encryption: active backend handler is {}",
++                activeHandler == null ? "absent" : activeHandler.getClass().getName());
++            disconnectRelay();
++            return;
++          }
++          if (relayResponseWrite != write) {
++            logger.error(
++                "Cannot enable backend encryption: response write no longer owns the relay");
++            disconnectRelay();
 +            return;
 +          }
 +          backend.enableEncryption(secret);
-+          relayState = RelayState.BACKEND_ENCRYPTED;
 +        } catch (GeneralSecurityException | RuntimeException exception) {
-+          failRelay(ConnectionMessages.INTERNAL_SERVER_CONNECTION_ERROR, exception);
++          logger.error("Cannot enable backend encryption after the target response write", exception);
++          disconnectRelay();
 +        } finally {
 +          Arrays.fill(secret, (byte) 0);
 +        }
 +      });
 +    } catch (GeneralSecurityException | RuntimeException exception) {
 +      Arrays.fill(secret, (byte) 0);
-+      failRelay(ConnectionMessages.INTERNAL_SERVER_CONNECTION_ERROR, exception);
++      logger.error("Cannot construct the target key response from the pending Server Hello", exception);
++      disconnectRelay();
 +    }
 +  }
 +
@@ -229,13 +387,54 @@ index 14884af4..67240b11 100644
 +   */
 +  public void resumeRelayConfiguration(ClientSettingsPacket settings) {
 +    MinecraftConnection backend = serverConn.ensureConnected();
-+    if (!backend.eventLoop().inEventLoop()
-+        || relayState != RelayState.LOGIN_SUCCEEDED) {
-+      failRelay(ConnectionMessages.INTERNAL_SERVER_CONNECTION_ERROR, null);
++    if (backend.getActiveSessionHandler() != this) {
++      MinecraftSessionHandler activeHandler = backend.getActiveSessionHandler();
++      logger.error(
++          "Cannot resume target configuration: active backend handler is {}",
++          activeHandler == null ? "absent" : activeHandler.getClass().getName());
++      disconnectRelay();
++      return;
++    }
++    final ChannelFuture responseWrite = relayResponseWrite;
++    if (!backend.eventLoop().inEventLoop()) {
++      logger.error("Cannot resume target configuration: caller is outside the backend event loop");
++      disconnectRelay();
++      return;
++    }
++    if (resultFuture.isDone()) {
++      logger.error("Cannot resume target configuration: backend result is already complete");
++      disconnectRelay();
++      return;
++    }
++    if (backend.isAutoReading()) {
++      logger.error("Cannot resume target configuration: backend reads are not paused");
++      disconnectRelay();
++      return;
++    }
++    if (responseWrite == null) {
++      logger.error("Cannot resume target configuration: relay response write is absent");
++      disconnectRelay();
++      return;
++    }
++    if (!responseWrite.isSuccess()) {
++      Throwable cause = responseWrite.cause();
++      if (cause == null) {
++        logger.error(
++            "Cannot resume target configuration: relay response write state is {}",
++            responseWrite);
++      } else {
++        logger.error("Cannot resume target configuration: relay response write failed", cause);
++      }
++      disconnectRelay();
++      return;
++    }
++    if (backend.getChannel().pipeline().context(CIPHER_DECODER) == null) {
++      logger.error("Cannot resume target configuration: backend cipher decoder is absent");
++      disconnectRelay();
 +      return;
 +    }
 +
-+    relayState = RelayState.CONFIGURATION_RESUMED;
++    relayResponseWrite = null;
 +    backend.write(new LoginAcknowledgedPacket());
 +    backend.setActiveSessionHandler(
 +        StateRegistry.CONFIG, new ConfigSessionHandler(server, serverConn, resultFuture));
@@ -245,75 +444,51 @@ index 14884af4..67240b11 100644
 +    backend.setAutoReading(true);
 +  }
 +
-+  /**
-+   * Completes the provisional connection with one failure result.
-+   *
-+   * <p>The frontend waits on this result and closes with the same user-facing
-+   * reason. A diagnostic failure keeps its complete cause chain in the server log.
-+   */
-+  private void failRelay(Component reason, Throwable failure) {
-+    if (relayState == RelayState.FAILED) {
-+      return;
-+    }
-+    relayState = RelayState.FAILED;
++  /** Closes the backend and completes its result with Velocity's stable connection error. */
++  private void disconnectRelay() {
 +    clearTargetHello();
-+    if (failure == null) {
-+      resultFuture.complete(ConnectionRequestResults.forDisconnect(reason, serverConn.getServer()));
-+    } else {
-+      logger.error("FakePlayerProxy login relay failed", failure);
-+      resultFuture.completeExceptionally(failure);
-+    }
++    relayResponseWrite = null;
++    resultFuture.complete(ConnectionRequestResults.forDisconnect(
++        ConnectionMessages.INTERNAL_SERVER_CONNECTION_ERROR, serverConn.getServer()));
 +    serverConn.disconnect();
 +  }
 +
 +  /**
-+   * Clears target data after response construction or connection failure.
++   * Releases target data after response construction or connection failure.
 +   *
-+   * <p>The public key is not secret. Clearing both arrays prevents stale data from
-+   * being reused if another packet reaches this handler after the relay ends.
++   * <p>The key and challenge are public protocol metadata. Dropping their one
++   * owner prevents stale reuse without treating them as secret AES material.
 +   */
 +  private void clearTargetHello() {
-+    if (targetPublicKey != null) {
-+      Arrays.fill(targetPublicKey, (byte) 0);
-+      targetPublicKey = null;
-+    }
-+    if (targetChallenge != null) {
-+      Arrays.fill(targetChallenge, (byte) 0);
-+      targetChallenge = null;
-+    }
++    targetHello = null;
 +  }
 +
    @Override
    public void exception(Throwable throwable) {
-+    relayState = RelayState.FAILED;
++    relayResponseWrite = null;
 +    clearTargetHello();
      resultFuture.completeExceptionally(throwable);
    }
  
    @Override
    public void disconnected() {
-+    relayState = RelayState.FAILED;
++    relayResponseWrite = null;
 +    clearTargetHello();
      if (server.getConfiguration().getPlayerInfoForwardingMode() == PlayerInfoForwarding.LEGACY) {
        resultFuture.completeExceptionally(new QuietRuntimeException(
                """
-@@ -216,4 +427,14 @@ public class LoginSessionHandler implements MinecraftSessionHandler {
+@@ -216,4 +600,9 @@ public class LoginSessionHandler implements MinecraftSessionHandler {
        );
      }
    }
 +
-+  private enum RelayState {
-+    AWAITING_HELLO,
-+    HELLO_FORWARDED,
-+    RESPONSE_WRITE_PENDING,
-+    BACKEND_ENCRYPTED,
-+    LOGIN_SUCCEEDED,
-+    CONFIGURATION_RESUMED,
-+    FAILED
++  /** Keeps the two values from one target Server Hello under one owner. */
++  private record TargetHello(byte[] publicKey, byte[] challenge) {
 +  }
++
  }
 diff --git a/proxy/src/main/java/com/velocitypowered/proxy/connection/client/AuthSessionHandler.java b/proxy/src/main/java/com/velocitypowered/proxy/connection/client/AuthSessionHandler.java
-index fee642b4..2937842b 100644
+index fee642b495fbcd95b25b34da696c7b5f14747b5d..1d621aec0ba349c40f0e98da55bb56213969bfc3 100644
 --- a/proxy/src/main/java/com/velocitypowered/proxy/connection/client/AuthSessionHandler.java
 +++ b/proxy/src/main/java/com/velocitypowered/proxy/connection/client/AuthSessionHandler.java
 @@ -38,6 +38,8 @@ import com.velocitypowered.proxy.config.PlayerInfoForwarding;
@@ -325,11 +500,19 @@ index fee642b4..2937842b 100644
  import com.velocitypowered.proxy.crypto.IdentifiedKeyImpl;
  import com.velocitypowered.proxy.protocol.StateRegistry;
  import com.velocitypowered.proxy.protocol.packet.LoginAcknowledgedPacket;
-@@ -54,9 +56,21 @@ import net.kyori.adventure.text.format.NamedTextColor;
- import org.apache.logging.log4j.LogManager;
- import org.apache.logging.log4j.Logger;
+@@ -45,8 +47,10 @@ import com.velocitypowered.proxy.protocol.packet.ServerLoginSuccessPacket;
+ import com.velocitypowered.proxy.protocol.packet.ServerboundCookieResponsePacket;
+ import com.velocitypowered.proxy.protocol.packet.SetCompressionPacket;
+ import io.netty.buffer.ByteBuf;
++import java.net.InetSocketAddress;
+ import java.util.Objects;
+ import java.util.Optional;
+ import java.util.UUID;
+ import java.util.concurrent.CompletableFuture;
++import java.util.concurrent.TimeUnit;
+ import net.kyori.adventure.text.Component;
+@@ -56,7 +60,22 @@ import org.apache.logging.log4j.Logger;
  import org.checkerframework.checker.nullness.qual.MonotonicNonNull;
-+import org.checkerframework.checker.nullness.qual.Nullable;
  
  /**
 - * A session handler that is activated to complete the login phase.
@@ -345,57 +528,53 @@ index fee642b4..2937842b 100644
 + * After the client acknowledges login, {@link ClientConfigSessionHandler} waits for the client
 + * settings and {@link PostLoginEvent}. It then resumes the existing target connection instead of
 + * creating a second backend connection.
++ *
++ * <p>The continuation value selects the ordinary initial server, the authenticated relay, or the
++ * short Vanilla Transfer after Login Acknowledged. These exhaustive construction modes prevent a
++ * partial combination of player, backend, session ID, and Transfer state.
   */
  public class AuthSessionHandler implements MinecraftSessionHandler {
  
-@@ -70,15 +84,46 @@ public class AuthSessionHandler implements MinecraftSessionHandler {
+@@ -70,15 +89,38 @@ public class AuthSessionHandler implements MinecraftSessionHandler {
    private final boolean onlineMode;
    private State loginState = State.START; // 1.20.2+
    private final String serverIdHash;
-+  // These values are null for a standard login. Together, they transfer the initial relay from
-+  // the frontend login handler to authentication and then to client configuration.
-+  private final @Nullable ConnectedPlayer existingPlayer;
-+  private final @Nullable VelocityServerConnection relayBackend;
-+  private final @Nullable UUID relaySessionId;
++  // This value selects the next owner after frontend authentication completes.
++  private final Continuation continuation;
  
    AuthSessionHandler(VelocityServer server, LoginInboundConnection inbound,
        GameProfile profile, boolean onlineMode, String serverIdHash) {
-+    this(server, inbound, profile, onlineMode, serverIdHash, null, null, null);
++    this(server, inbound, profile, onlineMode, serverIdHash,
++        InitialServer.INSTANCE);
 +  }
 +
 +  /**
-+   * Creates an authentication handler for a standard login or an initial relay.
++   * Creates an authentication handler for a standard login, relay, or short Transfer login.
 +   *
-+   * <p>The relay caller supplies all three relay values. The handler reuses the provisional
-+   * player, keeps the connected target, and forwards the target session ID to the client.
++   * <p>Each continuation carries only the owners needed by its next action. This value selects the
++   * action after Login Acknowledged. It does not describe a temporal protocol phase.
 +   *
 +   * @param server the Velocity server
 +   * @param inbound the frontend login connection
 +   * @param profile the profile that the target authenticated
 +   * @param onlineMode whether the target authenticated the profile online
 +   * @param serverIdHash the target session hash for the login event
-+   * @param existingPlayer the provisional player, or {@code null} for a standard login
-+   * @param relayBackend the authenticated target connection, or {@code null}
-+   * @param relaySessionId the target session ID, or {@code null}
++   * @param continuation the owner and action after Login Acknowledged
 +   */
 +  AuthSessionHandler(VelocityServer server, LoginInboundConnection inbound,
 +      GameProfile profile, boolean onlineMode, String serverIdHash,
-+      @Nullable ConnectedPlayer existingPlayer,
-+      @Nullable VelocityServerConnection relayBackend,
-+      @Nullable UUID relaySessionId) {
++      Continuation continuation) {
      this.server = Preconditions.checkNotNull(server, "server");
      this.inbound = Preconditions.checkNotNull(inbound, "inbound");
      this.profile = Preconditions.checkNotNull(profile, "profile");
      this.onlineMode = onlineMode;
      this.mcConnection = inbound.delegatedConnection();
      this.serverIdHash = serverIdHash;
-+    this.existingPlayer = existingPlayer;
-+    this.relayBackend = relayBackend;
-+    this.relaySessionId = relaySessionId;
++    this.continuation = Preconditions.checkNotNull(continuation, "continuation");
    }
  
    @Override
-@@ -96,10 +141,19 @@ public class AuthSessionHandler implements MinecraftSessionHandler {
+@@ -96,10 +138,24 @@ public class AuthSessionHandler implements MinecraftSessionHandler {
          return CompletableFuture.completedFuture(null);
        }
  
@@ -403,35 +582,54 @@ index fee642b4..2937842b 100644
 -      ConnectedPlayer player = new ConnectedPlayer(server, profileEvent.getGameProfile(),
 -          mcConnection, inbound.getVirtualHost().orElse(null), inbound.getRawVirtualHost().orElse(null), onlineMode,
 -          inbound.getHandshakeIntent(), inbound.getIdentifiedKey());
-+      ConnectedPlayer player;
-+      if (existingPlayer == null) {
-+        // Initiate a regular connection and move over to it.
-+        player = new ConnectedPlayer(server, profileEvent.getGameProfile(),
-+            mcConnection, inbound.getVirtualHost().orElse(null),
-+            inbound.getRawVirtualHost().orElse(null), onlineMode,
-+            inbound.getHandshakeIntent(), inbound.getIdentifiedKey());
-+      } else {
-+        // The target connection already references this provisional player. Replace its profile
-+        // after the profile event so every owner sees the same authenticated identity.
-+        existingPlayer.replaceGameProfile(profileEvent.getGameProfile());
-+        player = existingPlayer;
-+      }
++      ConnectedPlayer player = switch (continuation) {
++        case InitialServer ignored ->
++            // Initiate a regular connection and move over to it.
++            new ConnectedPlayer(server, profileEvent.getGameProfile(),
++                mcConnection, inbound.getVirtualHost().orElse(null),
++                inbound.getRawVirtualHost().orElse(null), onlineMode,
++                inbound.getHandshakeIntent(), inbound.getIdentifiedKey());
++        case Relay relay -> {
++          // The target already owns this player. Update the shared authenticated identity.
++          relay.player().replaceGameProfile(profileEvent.getGameProfile());
++          yield relay.player();
++        }
++        case Transfer transfer -> {
++          // The short login keeps its provisional player until it sends Transfer.
++          transfer.player().replaceGameProfile(profileEvent.getGameProfile());
++          yield transfer.player();
++        }
++      };
        this.connectedPlayer = player;
        if (!server.canRegisterConnection(player)) {
          player.disconnect0(
-@@ -131,6 +185,11 @@ public class AuthSessionHandler implements MinecraftSessionHandler {
+@@ -129,10 +185,22 @@ public class AuthSessionHandler implements MinecraftSessionHandler {
+               startLoginCompletion(player);
+             }
            }, mcConnection.eventLoop());
-     }, mcConnection.eventLoop()).exceptionally((ex) -> {
+-    }, mcConnection.eventLoop()).exceptionally((ex) -> {
++    }, mcConnection.eventLoop()).exceptionallyAsync(ex -> {
        logger.error("Exception during connection of {}", finalProfile, ex);
-+      if (existingPlayer != null && !mcConnection.isClosed()) {
-+        // The relay owns a live target connection at this point. Disconnecting the existing
-+        // player tears down both sides and prevents an authenticated backend from remaining idle.
-+        existingPlayer.disconnect0(ConnectionMessages.INTERNAL_SERVER_CONNECTION_ERROR, true);
++      if (!mcConnection.isClosed()) {
++        switch (continuation) {
++          case InitialServer ignored -> {
++          }
++          case Relay relay ->
++              // This also releases the authenticated target that owns the existing player.
++              relay.player().disconnect0(
++                  ConnectionMessages.INTERNAL_SERVER_CONNECTION_ERROR, true);
++          case Transfer transfer -> transfer.player().disconnect0(
++              ConnectionMessages.INTERNAL_SERVER_CONNECTION_ERROR, true);
++        }
 +      }
        return null;
-     });
+-    });
++    }, mcConnection.eventLoop());
    }
-@@ -182,14 +241,33 @@ public class AuthSessionHandler implements MinecraftSessionHandler {
+-
++
+   private void startLoginCompletion(ConnectedPlayer player) {
+@@ -182,14 +250,21 @@ public class AuthSessionHandler implements MinecraftSessionHandler {
        inbound.disconnect(Component.translatable("multiplayer.disconnect.invalid_player_data"));
      } else {
        loginState = State.ACKNOWLEDGED;
@@ -443,77 +641,180 @@ index fee642b4..2937842b 100644
 -        logger.error("Exception while connecting {} to initial server", connectedPlayer, ex);
 -        return null;
 -      });
-+      if (relayBackend == null) {
-+        // The standard path has no backend yet. It selects and connects one after PostLoginEvent.
-+        mcConnection.setActiveSessionHandler(StateRegistry.CONFIG,
-+            new ClientConfigSessionHandler(server, connectedPlayer));
-+        server.getEventManager().fire(new PostLoginEvent(connectedPlayer)).thenCompose(ignored -> {
-+          return connectToInitialServer(connectedPlayer);
-+        }).exceptionally((ex) -> {
-+          logger.error("Exception while connecting {} to initial server", connectedPlayer, ex);
-+          return null;
-+        });
-+      } else {
-+        // PostLoginEvent and the first client settings packet can complete in either order.
-+        // ClientConfigSessionHandler keeps both prerequisites and resumes this backend once.
-+        CompletableFuture<PostLoginEvent> postLoginFuture =
-+            server.getEventManager().fire(new PostLoginEvent(connectedPlayer));
-+        mcConnection.setActiveSessionHandler(StateRegistry.CONFIG,
-+            new ClientConfigSessionHandler(
-+                server, connectedPlayer, relayBackend, postLoginFuture));
-+        postLoginFuture.exceptionally(exception -> {
-+          logger.error("Exception in PostLoginEvent for {}", connectedPlayer, exception);
-+          if (!mcConnection.isClosed()) {
-+            connectedPlayer.disconnect0(
-+                ConnectionMessages.INTERNAL_SERVER_CONNECTION_ERROR, true);
-+          }
-+          return null;
-+        });
++      switch (continuation) {
++        case InitialServer ignored -> {
++          mcConnection.setActiveSessionHandler(StateRegistry.CONFIG,
++              new ClientConfigSessionHandler(server, connectedPlayer));
++          server.getEventManager().fire(new PostLoginEvent(connectedPlayer))
++              .thenCompose(ignoredEvent -> connectToInitialServer(connectedPlayer))
++              .exceptionally(ex -> {
++                logger.error(
++                    "Exception while connecting {} to initial server", connectedPlayer, ex);
++                return null;
++              });
++        }
++        case Relay relay -> startRelayConfiguration(relay.backend());
++        case Transfer ignored -> startTransfer();
 +      }
      }
      return true;
    }
-@@ -237,12 +315,15 @@ public class AuthSessionHandler implements MinecraftSessionHandler {
+@@ -237,26 +312,103 @@ public class AuthSessionHandler implements MinecraftSessionHandler {
          success.setProperties(player.getGameProfileProperties());
          success.setUuid(player.getUniqueId());
          if (inbound.getProtocolVersion().noLessThan(ProtocolVersion.MINECRAFT_26_2)) {
 -          success.setSessionId(server.getSessionId());
 +          // Minecraft 26.2 binds configuration to this session ID. A relay must forward the
 +          // target value because the target Login Success packet established that session.
-+          success.setSessionId(relaySessionId == null ? server.getSessionId() : relaySessionId);
++          UUID sessionId = switch (continuation) {
++            case InitialServer ignored -> server.getSessionId();
++            case Relay relay -> relay.sessionId();
++            case Transfer ignored -> server.getSessionId();
++          };
++          success.setSessionId(sessionId);
          }
          mcConnection.write(success);
  
          loginState = State.SUCCESS_SENT;
 -        if (inbound.getProtocolVersion().lessThan(ProtocolVersion.MINECRAFT_1_20_2)) {
-+        if (relayBackend == null
++        if (continuation instanceof InitialServer
 +            && inbound.getProtocolVersion().lessThan(ProtocolVersion.MINECRAFT_1_20_2)) {
            loginState = State.ACKNOWLEDGED;
            mcConnection.setActiveSessionHandler(StateRegistry.PLAY, new InitialConnectSessionHandler(player, server));
-           server.getEventManager().fire(new PostLoginEvent(player)).thenCompose((ignored) -> {
-@@ -255,6 +336,11 @@ public class AuthSessionHandler implements MinecraftSessionHandler {
+-          server.getEventManager().fire(new PostLoginEvent(player)).thenCompose((ignored) -> {
+-            return connectToInitialServer(player);
+-          }).exceptionally((ex) -> {
+-            logger.error("Exception while connecting {} to initial server", player, ex);
+-            return null;
+-          });
++          server.getEventManager().fire(new PostLoginEvent(player))
++              .thenCompose(ignored -> connectToInitialServer(player))
++              .exceptionally(ex -> {
++                logger.error("Exception while connecting {} to initial server", player, ex);
++                return null;
++              });
+         }
        }
-     }, mcConnection.eventLoop()).exceptionally((ex) -> {
+-    }, mcConnection.eventLoop()).exceptionally((ex) -> {
++    }, mcConnection.eventLoop()).exceptionallyAsync(ex -> {
        logger.error("Exception while completing login initialisation phase for {}", player, ex);
-+      if (relayBackend != null && !mcConnection.isClosed()) {
-+        // A relay cannot return to ordinary server selection after frontend login fails.
-+        // Disconnecting the player also releases the target connection that it owns.
-+        player.disconnect0(ConnectionMessages.INTERNAL_SERVER_CONNECTION_ERROR, true);
++      if (!mcConnection.isClosed()) {
++        switch (continuation) {
++          case InitialServer ignored -> {
++          }
++          case Relay ignored -> {
++            // A special login cannot return to ordinary server selection after this failure.
++            player.disconnect0(ConnectionMessages.INTERNAL_SERVER_CONNECTION_ERROR, true);
++          }
++          case Transfer ignored -> {
++            // A special login cannot return to ordinary server selection after this failure.
++            player.disconnect0(ConnectionMessages.INTERNAL_SERVER_CONNECTION_ERROR, true);
++          }
++        }
++      }
++      return null;
++    }, mcConnection.eventLoop());
++  }
++
++  /**
++   * Waits for the two configuration prerequisites before it resumes the relay backend.
++   *
++   * <p>The client settings and PostLogin event can complete in either order.
++   * The configuration handler owns this one-shot boundary.
++   */
++  private void startRelayConfiguration(VelocityServerConnection backend) {
++    CompletableFuture<PostLoginEvent> postLoginFuture =
++        server.getEventManager().fire(new PostLoginEvent(connectedPlayer));
++    mcConnection.setActiveSessionHandler(StateRegistry.CONFIG,
++        new ClientConfigSessionHandler(server, connectedPlayer, backend, postLoginFuture));
++    postLoginFuture.exceptionallyAsync(exception -> {
++      logger.error("Exception in PostLoginEvent for {}", connectedPlayer, exception);
++      if (!mcConnection.isClosed()) {
++        connectedPlayer.disconnect0(ConnectionMessages.INTERNAL_SERVER_CONNECTION_ERROR, true);
 +      }
        return null;
-     });
+-    });
++    }, mcConnection.eventLoop());
++  }
++
++  /**
++   * Transfers the short Vanilla login to the same public gateway address.
++   *
++   * <p>The client now uses Configuration packets. The next connection uses the
++   * Transfer intent, so the handshake handler can select the fixed raw tunnel.
++   */
++  private void startTransfer() {
++    InetSocketAddress transferAddress = inbound.getVirtualHost().orElse(null);
++    if (transferAddress == null) {
++      connectedPlayer.disconnect0(ConnectionMessages.INTERNAL_SERVER_CONNECTION_ERROR, true);
++      return;
++    }
++
++    mcConnection.setActiveSessionHandler(StateRegistry.CONFIG,
++        new ClientConfigSessionHandler(server, connectedPlayer));
++    // The provisional and raw target connections share Paper's source-IP throttle.
++    // The provisional backend is already closed before this continuation; waiting the full
++    // default four seconds prevents the second handshake from entering Paper's throttle window.
++    server.getEventManager().fire(new PostLoginEvent(connectedPlayer))
++        .thenRunAsync(() -> {
++          if (!mcConnection.isClosed()) {
++            connectedPlayer.transferToHost(transferAddress);
++          }
++        }, CompletableFuture.delayedExecutor(
++            4, TimeUnit.SECONDS, mcConnection.eventLoop()))
++        .exceptionallyAsync(exception -> {
++          logger.error("Exception before Transfer for {}", connectedPlayer, exception);
++          if (!mcConnection.isClosed()) {
++            connectedPlayer.disconnect0(
++                ConnectionMessages.INTERNAL_SERVER_CONNECTION_ERROR, true);
++          }
++          return null;
++        }, mcConnection.eventLoop());
    }
-@@ -285,6 +371,8 @@ public class AuthSessionHandler implements MinecraftSessionHandler {
+-
++
+   private CompletableFuture<Void> connectToInitialServer(ConnectedPlayer player) {
+@@ -285,6 +437,13 @@ public class AuthSessionHandler implements MinecraftSessionHandler {
    public void disconnected() {
      if (connectedPlayer != null) {
        connectedPlayer.teardown();
-+    } else if (existingPlayer != null) {
-+      existingPlayer.teardown();
++    } else {
++      switch (continuation) {
++        case InitialServer ignored -> {
++        }
++        case Relay relay -> relay.player().teardown();
++        case Transfer transfer -> transfer.player().teardown();
++      }
      }
      this.inbound.cleanup();
    }
+@@ -292,4 +451,24 @@ public class AuthSessionHandler implements MinecraftSessionHandler {
+   enum State {
+     START, SUCCESS_SENT, ACKNOWLEDGED
+   }
++
++  /** Selects the owner and action after Login Acknowledged. */
++  sealed interface Continuation permits InitialServer, Relay, Transfer {
++  }
++
++  /** Continues through Velocity's ordinary initial-server selection. */
++  enum InitialServer implements Continuation {
++    INSTANCE
++  }
++
++  /** Resumes the authenticated target after frontend configuration is ready. */
++  record Relay(
++      ConnectedPlayer player,
++      VelocityServerConnection backend,
++      UUID sessionId) implements Continuation {
++  }
++
++  /** Sends the short Vanilla login back to this gateway through Transfer. */
++  record Transfer(ConnectedPlayer player) implements Continuation {
++  }
+ }
 diff --git a/proxy/src/main/java/com/velocitypowered/proxy/connection/client/ClientConfigSessionHandler.java b/proxy/src/main/java/com/velocitypowered/proxy/connection/client/ClientConfigSessionHandler.java
-index e4c754f9..f6acf0fb 100644
+index e4c754f9a28f5cac0ed43fe294fae5bd8e1a5acd..609b7707b43ab7d9628df13f21f79834b011e239 100644
 --- a/proxy/src/main/java/com/velocitypowered/proxy/connection/client/ClientConfigSessionHandler.java
 +++ b/proxy/src/main/java/com/velocitypowered/proxy/connection/client/ClientConfigSessionHandler.java
 @@ -28,8 +28,10 @@ import com.velocitypowered.proxy.VelocityServer;
@@ -554,7 +855,7 @@ index e4c754f9..f6acf0fb 100644
    private String brandChannel = null;
  
    private CompletableFuture<?> configurationFuture;
-@@ -81,6 +92,31 @@ public class ClientConfigSessionHandler implements MinecraftSessionHandler {
+@@ -81,6 +92,32 @@ public class ClientConfigSessionHandler implements MinecraftSessionHandler {
    public ClientConfigSessionHandler(VelocityServer server, ConnectedPlayer player) {
      this.server = server;
      this.player = player;
@@ -581,12 +882,13 @@ index e4c754f9..f6acf0fb 100644
 +    CompletableFuture<ClientSettingsPacket> settingsFuture = new CompletableFuture<>();
 +    this.relaySettingsFuture = settingsFuture;
 +    // Successful PostLogin completion and the first settings packet form a one-shot barrier.
-+    relayPostLoginFuture.thenCombine(settingsFuture, (ignored, settings) -> settings)
-+        .thenAccept(settings -> scheduleRelayConfiguration(relayBackend, settings));
++    relayPostLoginFuture.thenAcceptBothAsync(settingsFuture,
++        (ignored, settings) -> scheduleRelayConfiguration(relayBackend, settings),
++        player.getConnection().eventLoop());
    }
  
    @Override
-@@ -102,6 +138,11 @@ public class ClientConfigSessionHandler implements MinecraftSessionHandler {
+@@ -102,6 +139,11 @@ public class ClientConfigSessionHandler implements MinecraftSessionHandler {
    @Override
    public boolean handle(ClientSettingsPacket packet) {
      player.setClientSettings(packet);
@@ -598,7 +900,7 @@ index e4c754f9..f6acf0fb 100644
      return true;
    }
  
-@@ -230,6 +271,24 @@ public class ClientConfigSessionHandler implements MinecraftSessionHandler {
+@@ -230,6 +272,33 @@ public class ClientConfigSessionHandler implements MinecraftSessionHandler {
      return false;
    }
  
@@ -606,6 +908,9 @@ index e4c754f9..f6acf0fb 100644
 +      VelocityServerConnection relayBackend, ClientSettingsPacket settings) {
 +    MinecraftConnection backend = relayBackend.getConnection();
 +    if (backend == null) {
++      logger.error(
++          "Cannot resume the FakePlayerProxy relay for {}: backend connection is absent",
++          player);
 +      player.disconnect(ConnectionMessages.INTERNAL_SERVER_CONNECTION_ERROR);
 +      return;
 +    }
@@ -615,7 +920,13 @@ index e4c754f9..f6acf0fb 100644
 +      if (backend.getActiveSessionHandler() instanceof LoginSessionHandler loginHandler) {
 +        loginHandler.resumeRelayConfiguration(settings);
 +      } else {
-+        player.disconnect(ConnectionMessages.INTERNAL_SERVER_CONNECTION_ERROR);
++        MinecraftSessionHandler activeHandler = backend.getActiveSessionHandler();
++        logger.error(
++            "Cannot resume the FakePlayerProxy relay for {}: active backend handler is {}",
++            player,
++            activeHandler == null ? "absent" : activeHandler.getClass().getName());
++        player.getConnection().eventLoop().execute(() ->
++            player.disconnect(ConnectionMessages.INTERNAL_SERVER_CONNECTION_ERROR));
 +      }
 +    });
 +  }
@@ -624,7 +935,7 @@ index e4c754f9..f6acf0fb 100644
    public void handleGeneric(MinecraftPacket packet) {
      VelocityServerConnection serverConnection = player.getConnectedServer();
 diff --git a/proxy/src/main/java/com/velocitypowered/proxy/connection/client/ConnectedPlayer.java b/proxy/src/main/java/com/velocitypowered/proxy/connection/client/ConnectedPlayer.java
-index e28b7c94..8c7b8b3e 100644
+index e28b7c9406c790c7c5873f4eb704b5e09d685a2f..fbc3e892b9d5bb50577c7f6bf4db4c30306739ff 100644
 --- a/proxy/src/main/java/com/velocitypowered/proxy/connection/client/ConnectedPlayer.java
 +++ b/proxy/src/main/java/com/velocitypowered/proxy/connection/client/ConnectedPlayer.java
 @@ -312,6 +312,18 @@ public class ConnectedPlayer implements MinecraftConnectionAssociation, Player,
@@ -646,7 +957,7 @@ index e28b7c94..8c7b8b3e 100644
    public MinecraftConnection getConnection() {
      return connection;
    }
-@@ -669,6 +681,28 @@ public class ConnectedPlayer implements MinecraftConnectionAssociation, Player,
+@@ -669,6 +681,25 @@ public class ConnectedPlayer implements MinecraftConnectionAssociation, Player,
      connectionInFlight = null;
    }
  
@@ -662,12 +973,9 @@ index e28b7c94..8c7b8b3e 100644
 +   * @param target the configured target for the initial relay
 +   * @return the normal Velocity connection result
 +   */
-+  CompletableFuture<Impl> connectToInitialServerForRelay(RegisteredServer target) {
-+    Preconditions.checkArgument(target instanceof VelocityRegisteredServer,
-+        "Not a valid Velocity server.");
-+
-+    VelocityServerConnection serverConnection = new VelocityServerConnection(
-+        (VelocityRegisteredServer) target, null, this, server);
++  CompletableFuture<Impl> connectToInitialServerForRelay(VelocityRegisteredServer target) {
++    VelocityServerConnection serverConnection =
++        new VelocityServerConnection(target, null, this, server);
 +    connectionInFlight = serverConnection;
 +    return serverConnection.connect();
 +  }
@@ -675,11 +983,151 @@ index e28b7c94..8c7b8b3e 100644
    /**
     * Handles unexpected disconnects.
     *
+diff --git a/proxy/src/main/java/com/velocitypowered/proxy/connection/client/HandshakeSessionHandler.java b/proxy/src/main/java/com/velocitypowered/proxy/connection/client/HandshakeSessionHandler.java
+index 83919b856bd5114a8e98d3529283b2ff6ac47a1a..83f6984e319cd05e4f6be776c8fa2fb212baa0f1 100644
+--- a/proxy/src/main/java/com/velocitypowered/proxy/connection/client/HandshakeSessionHandler.java
++++ b/proxy/src/main/java/com/velocitypowered/proxy/connection/client/HandshakeSessionHandler.java
+@@ -23,6 +23,7 @@ import com.velocitypowered.api.event.connection.ConnectionHandshakeEvent;
+ import com.velocitypowered.api.network.HandshakeIntent;
+ import com.velocitypowered.api.network.ProtocolState;
+ import com.velocitypowered.api.network.ProtocolVersion;
++import com.velocitypowered.api.proxy.server.RegisteredServer;
+ import com.velocitypowered.proxy.VelocityServer;
+ import com.velocitypowered.proxy.config.PlayerInfoForwarding;
+ import com.velocitypowered.proxy.connection.ConnectionType;
+@@ -42,6 +43,7 @@ import com.velocitypowered.proxy.protocol.packet.LegacyPingPacket;
+ import io.netty.buffer.ByteBuf;
+ import java.net.InetAddress;
+ import java.net.InetSocketAddress;
++import java.util.List;
+ import java.util.Optional;
+ import net.kyori.adventure.text.Component;
+ import net.kyori.adventure.text.format.NamedTextColor;
+@@ -52,5 +54,5 @@ import org.checkerframework.checker.nullness.qual.Nullable;
+ /**
+  * The initial handler used when a connection is established to the proxy. This will either
+- * transition to {@link StatusSessionHandler} or {@link InitialLoginSessionHandler} as soon as the
+- * handshake packet is received.
++ * transition to {@link StatusSessionHandler}, {@link InitialLoginSessionHandler}, or
++ * {@link TransferTunnelLoginSessionHandler} as soon as the handshake packet is received.
+  */
+@@ -60,10 +62,41 @@ public class HandshakeSessionHandler implements MinecraftSessionHandler {
+-
++
+   private final MinecraftConnection connection;
+   private final VelocityServer server;
++  private final TransferTunnelLoginSessionHandler.TargetConnector targetConnector;
+-
++
++  /**
++   * Creates the initial handler with Velocity's production backend bootstrap.
++   *
++   * <p>The Transfer branch pauses the frontend before this connector opens the fixed target. The
++   * target channel also starts with reads paused, so the Login bootstrap can install the raw
++   * handoff before either peer sends opaque encrypted data.
++   *
++   * @param connection the new frontend connection
++   * @param server the Velocity server that owns the target bootstrap
++   */
+   public HandshakeSessionHandler(MinecraftConnection connection, VelocityServer server) {
++    this(connection, server, (eventLoop, address) -> server.createBootstrap(eventLoop)
++        .option(io.netty.channel.ChannelOption.AUTO_READ, false)
++        .handler(server.getBackendChannelInitializer())
++        .connect(address));
++  }
++
++  /**
++   * Exposes only the target-connect boundary to the production raw-handoff test.
++   *
++   * <p>The test supplies an embedded target channel. This handler still runs the real Transfer
++   * routing, Login Start bootstrap, codec removal, and byte forwarding on both event loops.
++   *
++   * @param connection the test frontend connection
++   * @param server the Velocity server used by the production handler
++   * @param targetConnector the controlled connect boundary for the target channel
++   */
++  @VisibleForTesting
++  HandshakeSessionHandler(MinecraftConnection connection, VelocityServer server,
++      TransferTunnelLoginSessionHandler.TargetConnector targetConnector) {
+     this.connection = Preconditions.checkNotNull(connection, "connection");
+     this.server = Preconditions.checkNotNull(server, "server");
++    this.targetConnector = Preconditions.checkNotNull(targetConnector, "targetConnector");
+   }
+-
++
+   @Override
+@@ -94,9 +127,10 @@ public class HandshakeSessionHandler implements MinecraftSessionHandler {
+     } else {
+       final InitialInboundConnection ic = new InitialInboundConnection(connection,
+               cleanVhost(handshake.getServerAddress()), handshake);
+-      if (handshake.getIntent() == HandshakeIntent.TRANSFER
+-              && !server.getConfiguration().isAcceptTransfers()) {
+-        ic.disconnect(Component.translatable("multiplayer.disconnect.transfers_disabled"));
++      if (handshake.getIntent() == HandshakeIntent.TRANSFER) {
++        connection.setProtocolVersion(handshake.getProtocolVersion());
++        connection.setAssociation(ic);
++        handleTransferTunnel(handshake, ic);
+         return true;
+       }
+       connection.setProtocolVersion(handshake.getProtocolVersion());
+@@ -115,6 +149,51 @@ public class HandshakeSessionHandler implements MinecraftSessionHandler {
+     return true;
+   }
+-
++
++  /**
++   * Routes a Transfer handshake to the fixed target before normal login limits.
++   *
++   * <p>The second client connection must keep the same protocol version. The
++   * first static try server supplies the only permitted target address. The raw
++   * Login handler owns the next Login Start packet and target bootstrap.
++   *
++   * @param handshake the decoded Transfer handshake
++   * @param inbound the frontend connection used for Login errors
++   */
++  private void handleTransferTunnel(
++      HandshakePacket handshake, InitialInboundConnection inbound) {
++    if (!handshake.getProtocolVersion().isSupported()) {
++      connection.setState(StateRegistry.LOGIN);
++      inbound.disconnectQuietly(Component.translatable(
++          "multiplayer.disconnect.outdated_client",
++          Component.text(ProtocolVersion.SUPPORTED_VERSION_STRING)));
++      return;
++    }
++
++    List<String> targetNames = server.getConfiguration().getAttemptConnectionOrder();
++    if (targetNames.isEmpty()) {
++      connection.setState(StateRegistry.LOGIN);
++      inbound.disconnectQuietly(Component.translatable(
++          "velocity.error.no-available-servers", NamedTextColor.RED));
++      return;
++    }
++
++    Optional<RegisteredServer> target = server.getServer(targetNames.getFirst());
++    if (target.isEmpty()) {
++      connection.setState(StateRegistry.LOGIN);
++      inbound.disconnectQuietly(Component.translatable(
++          "velocity.error.no-available-servers", NamedTextColor.RED));
++      return;
++    }
++
++    connection.setActiveSessionHandler(StateRegistry.LOGIN,
++        new TransferTunnelLoginSessionHandler(
++            connection,
++            inbound,
++            handshake,
++            target.get().getServerInfo().getAddress(),
++            targetConnector));
++  }
++
+   private static @Nullable StateRegistry getStateForProtocol(int status) {
+     return switch (status) {
+       case StateRegistry.STATUS_ID -> StateRegistry.STATUS;
 diff --git a/proxy/src/main/java/com/velocitypowered/proxy/connection/client/InitialLoginSessionHandler.java b/proxy/src/main/java/com/velocitypowered/proxy/connection/client/InitialLoginSessionHandler.java
-index f6e1cd6e..1eb636b0 100644
+index f6e1cd6e1dce527af8928a67b2eb17fae999e8b3..0cb7e20a166cc136f003c7ff0e1806b7067d0605 100644
 --- a/proxy/src/main/java/com/velocitypowered/proxy/connection/client/InitialLoginSessionHandler.java
 +++ b/proxy/src/main/java/com/velocitypowered/proxy/connection/client/InitialLoginSessionHandler.java
-@@ -17,22 +17,22 @@
+@@ -17,22 +17,23 @@
  
  package com.velocitypowered.proxy.connection.client;
  
@@ -702,16 +1150,18 @@ index f6e1cd6e..1eb636b0 100644
  import com.velocitypowered.proxy.connection.MinecraftSessionHandler;
 +import com.velocitypowered.proxy.connection.backend.LoginSessionHandler;
 +import com.velocitypowered.proxy.connection.backend.VelocityServerConnection;
++import com.velocitypowered.proxy.connection.util.ConnectionMessages;
 +import com.velocitypowered.proxy.connection.util.ConnectionRequestResults.Impl;
  import com.velocitypowered.proxy.crypto.IdentifiedKeyImpl;
  import com.velocitypowered.proxy.protocol.StateRegistry;
  import com.velocitypowered.proxy.protocol.netty.MinecraftDecoder;
-@@ -40,19 +40,16 @@ import com.velocitypowered.proxy.protocol.packet.EncryptionRequestPacket;
+@@ -40,41 +41,57 @@ import com.velocitypowered.proxy.protocol.packet.EncryptionRequestPacket;
  import com.velocitypowered.proxy.protocol.packet.EncryptionResponsePacket;
  import com.velocitypowered.proxy.protocol.packet.LoginPluginResponsePacket;
  import com.velocitypowered.proxy.protocol.packet.ServerLoginPacket;
 +import com.velocitypowered.proxy.protocol.util.FakePlayerProxyRelay;
 +import com.velocitypowered.proxy.protocol.util.FakePlayerProxyRelay.ResponseKind;
++import com.velocitypowered.proxy.server.VelocityRegisteredServer;
  import com.velocitypowered.proxy.util.VelocityProperties;
  import io.netty.buffer.ByteBuf;
 -import java.net.InetSocketAddress;
@@ -727,10 +1177,13 @@ index f6e1cd6e..1eb636b0 100644
  import java.util.Optional;
 -import java.util.concurrent.ThreadLocalRandom;
 +import java.util.UUID;
++import java.util.concurrent.CompletableFuture;
  import net.kyori.adventure.text.Component;
  import net.kyori.adventure.text.format.NamedTextColor;
  import org.apache.logging.log4j.LogManager;
-@@ -61,20 +58,40 @@ import org.checkerframework.checker.nullness.qual.MonotonicNonNull;
+ import org.apache.logging.log4j.Logger;
+ import org.checkerframework.checker.nullness.qual.MonotonicNonNull;
++import org.checkerframework.checker.nullness.qual.Nullable;
  
  /**
   * Handles authenticating the player to Mojang's servers.
@@ -758,10 +1211,6 @@ index f6e1cd6e..1eb636b0 100644
 -      System.getProperty("mojang.sessionserver",
 -              "https://sessionserver.mojang.com/session/minecraft/hasJoined")
 -          .concat("?username=%s&serverId=%s");
-+  private static final Component RELAY_FAILURE = Component.text(
-+      "Unable to continue the proxy connection. Please try again.", NamedTextColor.RED);
-+  private static final Component MOD_REQUIRED = Component.text(
-+      "FakePlayerProxy Mod is required to connect.", NamedTextColor.RED);
  
    private final VelocityServer server;
    private final MinecraftConnection mcConnection;
@@ -770,7 +1219,7 @@ index f6e1cd6e..1eb636b0 100644
 -  private byte[] verify = EMPTY_BYTE_ARRAY;
 +  // These objects own the target connection before Velocity registers the player.
 +  private @MonotonicNonNull ConnectedPlayer relayPlayer;
-+  private @MonotonicNonNull VelocityServerConnection relayBackend;
++  private @Nullable VelocityServerConnection relayBackend;
 +  // This copy binds the later Mod acknowledgement to the active target login.
 +  private byte[] targetChallenge = EMPTY_BYTE_ARRAY;
    private LoginState currentState = LoginState.LOGIN_PACKET_EXPECTED;
@@ -790,7 +1239,14 @@ index f6e1cd6e..1eb636b0 100644
            } else {
              mcConnection.setActiveSessionHandler(StateRegistry.LOGIN,
                  new AuthSessionHandler(server, inbound,
-@@ -174,118 +188,232 @@ public class InitialLoginSessionHandler implements MinecraftSessionHandler {
+@@ -170,122 +184,338 @@ public class InitialLoginSessionHandler implements MinecraftSessionHandler {
+     return true;
+   }
+-
++
++  // ResponseKind is exhaustive. A default would hide a newly added login response branch.
++  @SuppressWarnings("checkstyle:MissingSwitchDefault")
+   @Override
    public boolean handle(EncryptionResponsePacket packet) {
      assertState(LoginState.ENCRYPTION_REQUEST_SENT);
      this.currentState = LoginState.ENCRYPTION_RESPONSE_RECEIVED;
@@ -803,12 +1259,12 @@ index f6e1cd6e..1eb636b0 100644
 -      throw new IllegalStateException("No EncryptionRequest packet sent yet.");
 +    VelocityServerConnection backend = relayBackend;
 +    if (backend == null) {
-+      disconnectRelay(RELAY_FAILURE);
++      logger.error("Cannot process frontend key response: provisional backend is absent");
++      disconnectRelay(ConnectionMessages.INTERNAL_SERVER_CONNECTION_ERROR);
 +      return true;
      }
  
 +    byte[] secret = null;
-+    byte[] responseChallenge = null;
      try {
        KeyPair serverKeyPair = server.getServerKeyPair();
 -      if (inbound.getIdentifiedKey() != null) {
@@ -824,11 +1280,12 @@ index f6e1cd6e..1eb636b0 100644
 -        }
 +      // The client used the decorated proxy key for both standard response fields.
 +      secret = decryptRsa(serverKeyPair, packet.getSharedSecret());
-+      responseChallenge = decryptRsa(serverKeyPair, packet.getVerifyToken());
++      byte[] responseChallenge = decryptRsa(serverKeyPair, packet.getVerifyToken());
 +      if (secret.length != 16) {
-+        logger.warn("The frontend returned an invalid AES secret length");
-+        backend.disconnect();
-+        mcConnection.close(true);
++        logger.error(
++            "Cannot process frontend key response: AES secret is {} bytes; expected 16",
++            secret.length);
++        disconnectRelay(ConnectionMessages.INTERNAL_SERVER_CONNECTION_ERROR);
 +        return true;
        }
  
@@ -841,19 +1298,28 @@ index f6e1cd6e..1eb636b0 100644
 -
 -      if (server.getConfiguration().shouldPreventClientProxyConnections()) {
 -        url += "&ip=" + urlFormParameterEscaper().escape(playerIp);
+-      }
 +      // Exact challenge comparison separates Vanilla, Mod, and damaged responses.
 +      ResponseKind responseKind = FakePlayerProxyRelay.classifyResponse(
 +          responseChallenge, targetChallenge);
 +
 +      // The client enables AES after it sends this packet. Enable AES before any reply.
 +      mcConnection.enableEncryption(secret);
-+      if (responseKind != ResponseKind.MOD) {
-+        backend.disconnect();
-+        clearTargetChallenge();
-+        // Vanilla can now read the encrypted Mod requirement. Invalid data gets a stable error.
-+        inbound.disconnect(responseKind == ResponseKind.VANILLA ? MOD_REQUIRED : RELAY_FAILURE);
-+        return true;
-       }
++      switch (responseKind) {
++        case INVALID -> {
++          logger.error(
++              "Cannot classify frontend key response: decrypted challenge matches neither "
++                  + "the target challenge nor the FPPACK acknowledgement");
++          disconnectRelay(ConnectionMessages.INTERNAL_SERVER_CONNECTION_ERROR);
++          return true;
++        }
++        case VANILLA -> {
++          ConnectedPlayer player = relayPlayer;
++          if (player == null) {
++            logger.error("Cannot start Vanilla Transfer login: provisional player is absent");
++            disconnectRelay(ConnectionMessages.INTERNAL_SERVER_CONNECTION_ERROR);
++            return true;
++          }
  
 -      final HttpRequest httpRequest = HttpRequest.newBuilder()
 -              .setHeader("User-Agent",
@@ -877,20 +1343,7 @@ index f6e1cd6e..1eb636b0 100644
 -
 -            // Go ahead and enable encryption. Once the client sends EncryptionResponse, encryption
 -            // is enabled.
-+      this.currentState = LoginState.BACKEND_AUTHENTICATING;
-+      // The backend event loop owns this copy until it installs its independent cipher.
-+      byte[] backendSecret = secret.clone();
-+      MinecraftConnection backendConnection = backend.getConnection();
-+      if (backendConnection == null) {
-+        Arrays.fill(backendSecret, (byte) 0);
-+        disconnectRelay(RELAY_FAILURE);
-+        return true;
-+      }
-+      try {
-+        backendConnection.eventLoop().execute(() -> {
-+          if (backendConnection.getActiveSessionHandler()
-+              instanceof LoginSessionHandler loginHandler) {
-             try {
+-            try {
 -              mcConnection.enableEncryption(decryptedSharedSecret);
 -            } catch (GeneralSecurityException e) {
 -              logger.error("Unable to enable encryption for connection", e);
@@ -898,12 +1351,7 @@ index f6e1cd6e..1eb636b0 100644
 -              // we can't do anything about it.
 -              mcConnection.close(true);
 -              return;
-+              loginHandler.completeRelayKeyResponse(backendSecret);
-+            } catch (RuntimeException exception) {
-+              Arrays.fill(backendSecret, (byte) 0);
-+              logger.error("Unable to transfer the AES secret to the backend", exception);
-+              mcConnection.eventLoop().execute(() -> disconnectRelay(RELAY_FAILURE));
-             }
+-            }
 -
 -            if (response.statusCode() == 200) {
 -              final GameProfile profile = GENERAL_GSON.fromJson(response.body(),
@@ -915,8 +1363,49 @@ index f6e1cd6e..1eb636b0 100644
 -                if (!key.internalAddHolder(profile.getId())) {
 -                  inbound.disconnect(
 -                      Component.translatable("multiplayer.disconnect.invalid_public_key"));
--                }
--              }
++          // Vanilla needs only the short frontend login. The second connection owns the target.
++          this.relayBackend = null;
++          player.resetInFlightConnection();
++          backend.disconnect();
++          clearTargetChallenge();
++          mcConnection.setActiveSessionHandler(StateRegistry.LOGIN,
++              new AuthSessionHandler(
++                  server, inbound, player.getGameProfile(), false, null,
++                  new AuthSessionHandler.Transfer(player)));
++          return true;
++        }
++        case MOD -> {
++          // The backend event loop owns this copy until it installs its independent cipher.
++          byte[] backendSecret = secret.clone();
++          MinecraftConnection backendConnection = backend.getConnection();
++          if (backendConnection == null) {
++            Arrays.fill(backendSecret, (byte) 0);
++            logger.error("Cannot relay Mod AES secret: provisional backend connection is absent");
++            disconnectRelay(ConnectionMessages.INTERNAL_SERVER_CONNECTION_ERROR);
++            return true;
++          }
++          try {
++            backendConnection.eventLoop().execute(() -> {
++              MinecraftSessionHandler activeHandler = backendConnection.getActiveSessionHandler();
++              if (activeHandler instanceof LoginSessionHandler loginHandler) {
++                try {
++                  loginHandler.completeRelayKeyResponse(backendSecret);
++                } catch (RuntimeException exception) {
++                  Arrays.fill(backendSecret, (byte) 0);
++                  logger.error(
++                      "Cannot transfer the Mod AES secret to the backend login handler",
++                      exception);
++                  mcConnection.eventLoop().execute(() -> disconnectRelay(
++                      ConnectionMessages.INTERNAL_SERVER_CONNECTION_ERROR));
+                 }
++              } else {
++                Arrays.fill(backendSecret, (byte) 0);
++                logger.error(
++                    "Cannot transfer the Mod AES secret: active backend handler is {}",
++                    activeHandler == null ? "absent" : activeHandler.getClass().getName());
++                mcConnection.eventLoop().execute(() -> disconnectRelay(
++                    ConnectionMessages.INTERNAL_SERVER_CONNECTION_ERROR));
+               }
 -              // All went well, initialize the session.
 -              mcConnection.setActiveSessionHandler(StateRegistry.LOGIN,
 -                  new AuthSessionHandler(server, inbound, profile, true, serverId));
@@ -937,27 +1426,24 @@ index f6e1cd6e..1eb636b0 100644
 -          });
 -    } catch (GeneralSecurityException e) {
 -      logger.error("Unable to enable encryption", e);
-+          } else {
+-      mcConnection.close(true);
++            });
++          } catch (RuntimeException exception) {
++            // The backend can close before its event loop accepts the temporary secret copy.
++            logger.error("Cannot schedule the Mod AES secret transfer on the backend event loop",
++                exception);
 +            Arrays.fill(backendSecret, (byte) 0);
-+            mcConnection.eventLoop().execute(() -> disconnectRelay(RELAY_FAILURE));
++            disconnectRelay(ConnectionMessages.INTERNAL_SERVER_CONNECTION_ERROR);
 +          }
-+        });
-+      } catch (RuntimeException exception) {
-+        // The backend can close before its event loop accepts the temporary secret copy.
-+        logger.error("Unable to schedule the AES secret transfer to the backend", exception);
-+        Arrays.fill(backendSecret, (byte) 0);
-+        disconnectRelay(RELAY_FAILURE);
++        }
 +      }
 +    } catch (GeneralSecurityException exception) {
-+      logger.error("Unable to process the frontend key response", exception);
-+      backend.disconnect();
-       mcConnection.close(true);
++      logger.error("Cannot decrypt the frontend key response or enable frontend encryption",
++          exception);
++      disconnectRelay(ConnectionMessages.INTERNAL_SERVER_CONNECTION_ERROR);
 +    } finally {
 +      if (secret != null) {
 +        Arrays.fill(secret, (byte) 0);
-+      }
-+      if (responseChallenge != null) {
-+        Arrays.fill(responseChallenge, (byte) 0);
 +      }
      }
      return true;
@@ -980,10 +1466,16 @@ index f6e1cd6e..1eb636b0 100644
 +  private void startInitialBackendConnection() {
 +    ServerLoginPacket login = this.login;
 +    if (login == null) {
-+      disconnectRelay(RELAY_FAILURE);
++      logger.error("Cannot start initial relay: Login Start packet is absent");
++      disconnectRelay(ConnectionMessages.INTERNAL_SERVER_CONNECTION_ERROR);
 +      return;
 +    }
+-
 +
+-    EncryptionRequestPacket request = new EncryptionRequestPacket();
+-    request.setPublicKey(server.getServerKeyPair().getPublic().getEncoded());
+-    request.setVerifyToken(verify);
+-    return request;
 +    UUID holderUuid = login.getHolderUuid();
 +    GameProfile provisionalProfile = holderUuid == null
 +        ? GameProfile.forOfflinePlayer(login.getUsername())
@@ -1002,19 +1494,31 @@ index f6e1cd6e..1eb636b0 100644
 +
 +    Optional<RegisteredServer> target = player.getNextServerToTry();
 +    if (target.isEmpty()) {
++      logger.error("Cannot start initial relay for {}: no configured target is available", player);
 +      disconnectRelay(Component.translatable(
 +          "velocity.error.no-available-servers", NamedTextColor.RED));
 +      return;
 +    }
- 
--    EncryptionRequestPacket request = new EncryptionRequestPacket();
--    request.setPublicKey(server.getServerKeyPair().getPublic().getEncoded());
--    request.setVerifyToken(verify);
--    return request;
-+    this.currentState = LoginState.BACKEND_CONNECTING;
-+    player.connectToInitialServerForRelay(target.get())
-+        .whenCompleteAsync(this::handleInitialBackendResult, mcConnection.eventLoop());
++
++    RegisteredServer configuredTarget = target.get();
++    if (!(configuredTarget instanceof VelocityRegisteredServer velocityTarget)) {
++      logger.error(
++          "Cannot start initial relay for {}: configured target {} is not owned by Velocity",
++          player, configuredTarget);
++      disconnectRelay(ConnectionMessages.INTERNAL_SERVER_CONNECTION_ERROR);
++      return;
++    }
++
++    CompletableFuture<Impl> connectionResult =
++        player.connectToInitialServerForRelay(velocityTarget);
 +    this.relayBackend = player.getConnectionInFlight();
++    if (this.relayBackend == null) {
++      logger.error(
++          "Cannot start initial relay for {}: connection request retained no backend", player);
++      disconnectRelay(ConnectionMessages.INTERNAL_SERVER_CONNECTION_ERROR);
++      return;
++    }
++    connectionResult.whenCompleteAsync(this::handleInitialBackendResult, mcConnection.eventLoop());
 +  }
 +
 +  /**
@@ -1025,10 +1529,22 @@ index f6e1cd6e..1eb636b0 100644
 +   * that completion. This method therefore owns only failure propagation.
 +   */
 +  private void handleInitialBackendResult(Impl result, Throwable failure) {
++    if (relayBackend == null) {
++      return;
++    }
 +    if (failure != null && !mcConnection.isClosed()) {
-+      disconnectRelay(RELAY_FAILURE);
++      logger.error("Initial FakePlayerProxy backend connection failed", failure);
++      disconnectRelay(ConnectionMessages.INTERNAL_SERVER_CONNECTION_ERROR);
 +    } else if (result != null && !result.isSuccessful() && !mcConnection.isClosed()) {
-+      disconnectRelay(result.getReasonComponent().orElse(RELAY_FAILURE));
++      Component reason = result.getReasonComponent()
++          .orElse(ConnectionMessages.INTERNAL_SERVER_CONNECTION_ERROR);
++      logger.error(
++          "Initial FakePlayerProxy backend connection returned an unsuccessful result: {}",
++          reason);
++      disconnectRelay(reason);
++    } else if (result == null && !mcConnection.isClosed()) {
++      logger.error("Initial FakePlayerProxy backend connection completed without a result");
++      disconnectRelay(ConnectionMessages.INTERNAL_SERVER_CONNECTION_ERROR);
 +    }
 +  }
 +
@@ -1047,10 +1563,30 @@ index f6e1cd6e..1eb636b0 100644
 +  public void handleBackendEncryptionRequest(
 +      VelocityServerConnection backend, EncryptionRequestPacket packet) {
 +    mcConnection.eventLoop().execute(() -> {
-+      if (mcConnection.isClosed()
-+          || currentState != LoginState.BACKEND_CONNECTING
-+          || relayBackend != backend) {
-+        disconnectRelay(RELAY_FAILURE);
++      if (mcConnection.isClosed()) {
++        logger.error("Cannot forward target Server Hello: frontend connection is closed");
++        disconnectRelay(ConnectionMessages.INTERNAL_SERVER_CONNECTION_ERROR);
++        return;
++      }
++      if (mcConnection.getActiveSessionHandler() != this) {
++        MinecraftSessionHandler activeHandler = mcConnection.getActiveSessionHandler();
++        logger.error(
++            "Cannot forward target Server Hello: active frontend handler is {}",
++            activeHandler == null ? "absent" : activeHandler.getClass().getName());
++        disconnectRelay(ConnectionMessages.INTERNAL_SERVER_CONNECTION_ERROR);
++        return;
++      }
++      if (currentState != LoginState.LOGIN_PACKET_RECEIVED) {
++        logger.error(
++            "Cannot forward target Server Hello: frontend login state is {}; expected {}",
++            currentState, LoginState.LOGIN_PACKET_RECEIVED);
++        disconnectRelay(ConnectionMessages.INTERNAL_SERVER_CONNECTION_ERROR);
++        return;
++      }
++      if (relayBackend != backend) {
++        logger.error(
++            "Cannot forward target Server Hello: callback backend does not own the relay");
++        disconnectRelay(ConnectionMessages.INTERNAL_SERVER_CONNECTION_ERROR);
 +        return;
 +      }
 +
@@ -1061,9 +1597,10 @@ index f6e1cd6e..1eb636b0 100644
 +        this.targetChallenge = packet.getVerifyToken();
 +        this.currentState = LoginState.ENCRYPTION_REQUEST_SENT;
 +        mcConnection.write(packet);
-+      } catch (GeneralSecurityException exception) {
-+        logger.error("Unable to decorate the target Server Hello", exception);
-+        disconnectRelay(RELAY_FAILURE);
++      } catch (GeneralSecurityException | RuntimeException exception) {
++        logger.error("Cannot decorate or forward the target Server Hello with the proxy RSA carrier",
++            exception);
++        disconnectRelay(ConnectionMessages.INTERNAL_SERVER_CONNECTION_ERROR);
 +      }
 +    });
 +  }
@@ -1078,20 +1615,43 @@ index f6e1cd6e..1eb636b0 100644
 +  public void handleBackendLoginSuccess(
 +      VelocityServerConnection backend, GameProfile profile, UUID sessionId) {
 +    mcConnection.eventLoop().execute(() -> {
-+      if (mcConnection.isClosed()
-+          || currentState != LoginState.BACKEND_AUTHENTICATING
-+          || relayBackend != backend
-+          || relayPlayer == null) {
-+        disconnectRelay(RELAY_FAILURE);
++      if (mcConnection.getActiveSessionHandler() != this) {
++        MinecraftSessionHandler activeHandler = mcConnection.getActiveSessionHandler();
++        logger.error(
++            "Cannot continue target Login Success: active frontend handler is {}",
++            activeHandler == null ? "absent" : activeHandler.getClass().getName());
++        disconnectRelay(ConnectionMessages.INTERNAL_SERVER_CONNECTION_ERROR);
++        return;
++      }
++      if (mcConnection.isClosed()) {
++        logger.error("Cannot continue target Login Success: frontend connection is closed");
++        disconnectRelay(ConnectionMessages.INTERNAL_SERVER_CONNECTION_ERROR);
++        return;
++      }
++      if (currentState != LoginState.ENCRYPTION_RESPONSE_RECEIVED) {
++        logger.error(
++            "Cannot continue target Login Success: frontend login state is {}; expected {}",
++            currentState, LoginState.ENCRYPTION_RESPONSE_RECEIVED);
++        disconnectRelay(ConnectionMessages.INTERNAL_SERVER_CONNECTION_ERROR);
++        return;
++      }
++      if (relayBackend != backend) {
++        logger.error(
++            "Cannot continue target Login Success: callback backend does not own the relay");
++        disconnectRelay(ConnectionMessages.INTERNAL_SERVER_CONNECTION_ERROR);
++        return;
++      }
++      if (relayPlayer == null) {
++        logger.error("Cannot continue target Login Success: provisional player is absent");
++        disconnectRelay(ConnectionMessages.INTERNAL_SERVER_CONNECTION_ERROR);
 +        return;
 +      }
 +
 +      clearTargetChallenge();
-+      this.currentState = LoginState.TARGET_AUTHENTICATED;
 +      mcConnection.setActiveSessionHandler(StateRegistry.LOGIN,
 +          new AuthSessionHandler(
 +              server, inbound, profile, true, null,
-+              relayPlayer, backend, sessionId));
++              new AuthSessionHandler.Relay(relayPlayer, backend, sessionId)));
 +    });
 +  }
 +
@@ -1112,14 +1672,13 @@ index f6e1cd6e..1eb636b0 100644
 +    }
 +  }
 +
-+  /** Clears the challenge copy when no later relay stage needs it. */
++  /** Drops the public challenge when no later relay stage needs it. */
 +  private void clearTargetChallenge() {
-+    Arrays.fill(targetChallenge, (byte) 0);
 +    targetChallenge = EMPTY_BYTE_ARRAY;
    }
  
    @Override
-@@ -295,6 +423,10 @@ public class InitialLoginSessionHandler implements MinecraftSessionHandler {
+@@ -295,6 +525,10 @@ public class InitialLoginSessionHandler implements MinecraftSessionHandler {
  
    @Override
    public void disconnected() {
@@ -1130,20 +1689,492 @@ index f6e1cd6e..1eb636b0 100644
      this.inbound.cleanup();
    }
  
-@@ -312,7 +444,10 @@ public class InitialLoginSessionHandler implements MinecraftSessionHandler {
-   private enum LoginState {
-     LOGIN_PACKET_EXPECTED,
-     LOGIN_PACKET_RECEIVED,
-+    BACKEND_CONNECTING,
-     ENCRYPTION_REQUEST_SENT,
--    ENCRYPTION_RESPONSE_RECEIVED
-+    ENCRYPTION_RESPONSE_RECEIVED,
-+    BACKEND_AUTHENTICATING,
-+    TARGET_AUTHENTICATED
-   }
- }
+diff --git a/proxy/src/main/java/com/velocitypowered/proxy/connection/client/RawTunnelForwardHandler.java b/proxy/src/main/java/com/velocitypowered/proxy/connection/client/RawTunnelForwardHandler.java
+new file mode 100644
+index 0000000000000000000000000000000000000000..ee167c16fe93f9adfafc1fc30616245d2499fe60
+--- /dev/null
++++ b/proxy/src/main/java/com/velocitypowered/proxy/connection/client/RawTunnelForwardHandler.java
+@@ -0,0 +1,145 @@
++/*
++ * Copyright (C) 2018-2023 Velocity Contributors
++ *
++ * This program is free software: you can redistribute it and/or modify
++ * it under the terms of the GNU General Public License as published by
++ * the Free Software Foundation, either version 3 of the License, or
++ * (at your option) any later version.
++ *
++ * This program is distributed in the hope that it will be useful,
++ * but WITHOUT ANY WARRANTY; without even the implied warranty of
++ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
++ * GNU General Public License for more details.
++ *
++ * You should have received a copy of the GNU General Public License
++ * along with this program.  If not, see <https://www.gnu.org/licenses/>.
++ */
++
++package com.velocitypowered.proxy.connection.client;
++
++import com.google.common.base.Preconditions;
++import io.netty.buffer.ByteBuf;
++import io.netty.channel.Channel;
++import io.netty.channel.ChannelHandlerContext;
++import io.netty.channel.ChannelInboundHandlerAdapter;
++import io.netty.util.ReferenceCountUtil;
++import org.apache.logging.log4j.LogManager;
++import org.apache.logging.log4j.Logger;
++
++/**
++ * Forwards opaque bytes to one raw tunnel peer.
++ *
++ * <p>The Login bootstrap removes all Minecraft codecs before it adds this
++ * handler. The peer write takes direct ownership of each accepted byte buffer.
++ * This handler also pauses peer reads when this channel cannot accept more
++ * outbound data.
++ *
++ * <p>A channel close or write failure closes the peer. No handler can add a
++ * Minecraft packet after this handoff.
++ */
++final class RawTunnelForwardHandler extends ChannelInboundHandlerAdapter {
++
++  private static final Logger logger = LogManager.getLogger(RawTunnelForwardHandler.class);
++  static final String HANDLER_NAME = "fakeplayerproxy-raw-tunnel";
++
++  private final Channel peer;
++
++  RawTunnelForwardHandler(Channel peer) {
++    this.peer = Preconditions.checkNotNull(peer, "peer");
++  }
++
++  @Override
++  public void channelRead(ChannelHandlerContext context, Object message) {
++    if (!(message instanceof ByteBuf buffer)) {
++      logger.error(
++          "Cannot forward raw tunnel input from channel {}: message type is {}",
++          context.channel(), message == null ? "absent" : message.getClass().getName());
++      ReferenceCountUtil.release(message);
++      closeBoth(context.channel());
++      return;
++    }
++    if (!peer.isActive()) {
++      logger.error(
++          "Cannot write raw tunnel bytes from channel {} to peer {}: peer is inactive",
++          context.channel(), peer);
++      ReferenceCountUtil.release(message);
++      closeBoth(context.channel());
++      return;
++    }
++
++    peer.write(buffer).addListener(future -> {
++      if (!future.isSuccess()) {
++        Throwable cause = future.cause();
++        if (cause == null) {
++          logger.error(
++              "Cannot write raw tunnel bytes from channel {} to peer {}: write failed "
++                  + "without a cause",
++              context.channel(), peer);
++        } else {
++          logger.error(
++              "Cannot write raw tunnel bytes from channel {} to peer {}",
++              context.channel(), peer, cause);
++        }
++        closeBoth(context.channel());
++      }
++    });
++  }
++
++  @Override
++  public void channelReadComplete(ChannelHandlerContext context) {
++    peer.flush();
++  }
++
++  @Override
++  public void channelWritabilityChanged(ChannelHandlerContext context) {
++    setPeerReads(context.channel().isWritable());
++  }
++
++  @Override
++  public void channelInactive(ChannelHandlerContext context) {
++    closeChannel(peer, "peer after source channel " + context.channel() + " closed");
++  }
++
++  @Override
++  public void exceptionCaught(ChannelHandlerContext context, Throwable throwable) {
++    logger.error(
++        "Raw tunnel read failed on channel {} with peer {}",
++        context.channel(), peer, throwable);
++    closeBoth(context.channel());
++  }
++
++  private void setPeerReads(boolean enabled) {
++    if (!peer.eventLoop().inEventLoop()) {
++      peer.eventLoop().execute(() -> setPeerReads(enabled));
++      return;
++    }
++    if (peer.isActive()) {
++      peer.config().setAutoRead(enabled);
++      if (enabled) {
++        peer.read();
++      }
++    }
++  }
++
++  private void closeBoth(Channel source) {
++    closeChannel(source, "source");
++    closeChannel(peer, "peer");
++  }
++
++  private void closeChannel(Channel channel, String side) {
++    if (channel.isActive()) {
++      channel.close().addListener(future -> {
++        if (!future.isSuccess()) {
++          Throwable cause = future.cause();
++          if (cause == null) {
++            logger.error(
++                "Cannot close raw tunnel {} channel {}: close failed without a cause",
++                side, channel);
++          } else {
++            logger.error("Cannot close raw tunnel {} channel {}", side, channel, cause);
++          }
++        }
++      });
++    }
++  }
++}
+diff --git a/proxy/src/main/java/com/velocitypowered/proxy/connection/client/TransferTunnelLoginSessionHandler.java b/proxy/src/main/java/com/velocitypowered/proxy/connection/client/TransferTunnelLoginSessionHandler.java
+new file mode 100644
+index 0000000000000000000000000000000000000000..b4d71b90e6ec6eed0f8d438173a584096cd27516
+--- /dev/null
++++ b/proxy/src/main/java/com/velocitypowered/proxy/connection/client/TransferTunnelLoginSessionHandler.java
+@@ -0,0 +1,327 @@
++/*
++ * Copyright (C) 2018-2023 Velocity Contributors
++ *
++ * This program is free software: you can redistribute it and/or modify
++ * it under the terms of the GNU General Public License as published by
++ * the Free Software Foundation, either version 3 of the License, or
++ * (at your option) any later version.
++ *
++ * This program is distributed in the hope that it will be useful,
++ * but WITHOUT ANY WARRANTY; without even the implied warranty of
++ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
++ * GNU General Public License for more details.
++ *
++ * You should have received a copy of the GNU General Public License
++ * along with this program.  If not, see <https://www.gnu.org/licenses/>.
++ */
++
++package com.velocitypowered.proxy.connection.client;
++
++import static com.velocitypowered.proxy.network.Connections.FLOW_HANDLER;
++import static com.velocitypowered.proxy.network.Connections.FRAME_DECODER;
++import static com.velocitypowered.proxy.network.Connections.FRAME_ENCODER;
++import static com.velocitypowered.proxy.network.Connections.HANDLER;
++import static com.velocitypowered.proxy.network.Connections.LEGACY_PING_DECODER;
++import static com.velocitypowered.proxy.network.Connections.LEGACY_PING_ENCODER;
++import static com.velocitypowered.proxy.network.Connections.MINECRAFT_DECODER;
++import static com.velocitypowered.proxy.network.Connections.MINECRAFT_ENCODER;
++
++import com.google.common.base.Preconditions;
++import com.velocitypowered.api.network.HandshakeIntent;
++import com.velocitypowered.proxy.connection.MinecraftConnection;
++import com.velocitypowered.proxy.connection.MinecraftSessionHandler;
++import com.velocitypowered.proxy.connection.util.ConnectionMessages;
++import com.velocitypowered.proxy.protocol.StateRegistry;
++import com.velocitypowered.proxy.protocol.netty.MinecraftEncoder;
++import com.velocitypowered.proxy.protocol.packet.HandshakePacket;
++import com.velocitypowered.proxy.protocol.packet.ServerLoginPacket;
++import io.netty.buffer.ByteBuf;
++import io.netty.channel.Channel;
++import io.netty.channel.ChannelFuture;
++import io.netty.channel.ChannelPipeline;
++import io.netty.channel.EventLoop;
++import java.net.InetSocketAddress;
++import org.apache.logging.log4j.LogManager;
++import org.apache.logging.log4j.Logger;
++
++/**
++ * Owns the plaintext Login Start boundary for one Transfer connection.
++ *
++ * <p>The handshake handler validates the protocol and selects the fixed target.
++ * This handler accepts one Login Start packet and pauses frontend reads. It then
++ * writes a Login handshake and the unchanged Login Start to the target.
++ *
++ * <p>After both writes complete, this handler removes the Minecraft codecs from
++ * both channels. {@link RawTunnelForwardHandler} then owns all later bytes.
++ */
++final class TransferTunnelLoginSessionHandler implements MinecraftSessionHandler {
++
++  private static final Logger logger =
++      LogManager.getLogger(TransferTunnelLoginSessionHandler.class);
++  private final MinecraftConnection frontend;
++  private final InitialInboundConnection inbound;
++  private final HandshakePacket transferHandshake;
++  private final InetSocketAddress targetAddress;
++  private final TargetConnector targetConnector;
++  private Channel target;
++
++  TransferTunnelLoginSessionHandler(
++      MinecraftConnection frontend,
++      InitialInboundConnection inbound,
++      HandshakePacket transferHandshake,
++      InetSocketAddress targetAddress,
++      TargetConnector targetConnector) {
++    this.frontend = Preconditions.checkNotNull(frontend, "frontend");
++    this.inbound = Preconditions.checkNotNull(inbound, "inbound");
++    this.transferHandshake = Preconditions.checkNotNull(transferHandshake, "transferHandshake");
++    this.targetAddress = Preconditions.checkNotNull(targetAddress, "targetAddress");
++    this.targetConnector = Preconditions.checkNotNull(targetConnector, "targetConnector");
++  }
++
++  /**
++   * Accepts one Login Start packet before the raw byte handoff.
++   *
++   * <p>A normal client waits for Server Hello after this packet. Pausing reads
++   * here preserves a complete packet boundary while the target connects.
++   */
++  @Override
++  public boolean handle(ServerLoginPacket packet) {
++    if (target != null) {
++      logger.error(
++          "Cannot accept Transfer Login Start: target channel {} already exists", target);
++      closeBeforeHandoff();
++      return true;
++    }
++
++    frontend.setAutoReading(false);
++    ChannelFuture connectFuture;
++    try {
++      connectFuture = targetConnector.connect(frontend.eventLoop(), targetAddress);
++    } catch (RuntimeException exception) {
++      logger.error("Cannot start raw target connection to {}", targetAddress, exception);
++      closeBeforeHandoff();
++      return true;
++    }
++    if (connectFuture == null) {
++      logger.error("Cannot connect raw target channel to {}: connector returned no future",
++          targetAddress);
++      closeBeforeHandoff();
++      return true;
++    }
++    this.target = connectFuture.channel();
++    connectFuture.addListener(future -> {
++      if (!future.isSuccess()) {
++        Throwable cause = future.cause();
++        if (cause == null) {
++          logger.error(
++              "Cannot connect raw target channel to {}: connect failed without a cause",
++              targetAddress);
++        } else {
++          logger.error("Cannot connect raw target channel to {}", targetAddress, cause);
++        }
++        closeBeforeHandoff();
++        return;
++      }
++
++      if (frontend.isClosed()) {
++        Channel targetChannel = this.target;
++        this.target = null;
++        if (targetChannel == null) {
++          return;
++        }
++        targetChannel.close().addListener(closeFuture -> {
++          if (!closeFuture.isSuccess()) {
++            Throwable cause = closeFuture.cause();
++            if (cause == null) {
++              logger.error(
++                  "Cannot close raw target channel {} after the frontend closed: "
++                      + "close failed without a cause",
++                  targetChannel);
++            } else {
++              logger.error(
++                  "Cannot close raw target channel {} after the frontend closed",
++                  targetChannel, cause);
++            }
++          }
++        });
++        return;
++      }
++      try {
++        writeTargetBootstrap(packet);
++      } catch (RuntimeException exception) {
++        logger.error("Cannot write the raw target handshake and Login Start", exception);
++        closeBeforeHandoff();
++      }
++    });
++    return true;
++  }
++
++  /**
++   * Writes the replacement Login handshake and the unchanged Login Start.
++   *
++   * <p>The first write keeps the protocol, host, and port from the Transfer
++   * handshake. It changes only the intent. The second write preserves every
++   * decoded Login Start field. The write result owns the raw handoff decision.
++   *
++   * @param loginPacket the Login Start packet from the client
++   */
++  private void writeTargetBootstrap(ServerLoginPacket loginPacket) {
++    Channel targetChannel = Preconditions.checkNotNull(target, "target");
++    HandshakePacket targetHandshake = new HandshakePacket();
++    targetHandshake.setProtocolVersion(transferHandshake.getProtocolVersion());
++    targetHandshake.setServerAddress(transferHandshake.getServerAddress());
++    targetHandshake.setPort(transferHandshake.getPort());
++    targetHandshake.setIntent(HandshakeIntent.LOGIN);
++
++    ChannelFuture handshakeWrite = targetChannel.write(targetHandshake);
++    MinecraftEncoder encoder = targetChannel.pipeline().get(MinecraftEncoder.class);
++    encoder.setProtocolVersion(transferHandshake.getProtocolVersion());
++    encoder.setState(StateRegistry.LOGIN);
++    ChannelFuture loginWrite = targetChannel.writeAndFlush(loginPacket);
++    loginWrite.addListener(future -> {
++      if (!handshakeWrite.isSuccess()) {
++        Throwable cause = handshakeWrite.cause();
++        if (cause == null) {
++          logger.error(
++              "Cannot write raw target handshake to {}: write state is {}",
++              targetAddress, handshakeWrite);
++        } else {
++          logger.error("Cannot write raw target handshake to {}", targetAddress, cause);
++        }
++        closeBeforeHandoff();
++        return;
++      }
++      if (!future.isSuccess()) {
++        Throwable cause = future.cause();
++        if (cause == null) {
++          logger.error("Cannot write raw target Login Start to {}: write failed without a cause",
++              targetAddress);
++        } else {
++          logger.error("Cannot write raw target Login Start to {}", targetAddress, cause);
++        }
++        closeBeforeHandoff();
++        return;
++      }
++      try {
++        installRawTunnel(frontend.getChannel(), targetChannel);
++        // The raw handlers now own both channels. This bootstrap no longer owns the target.
++        target = null;
++      } catch (RuntimeException exception) {
++        logger.error("Cannot replace the frontend and target pipelines with the raw tunnel",
++            exception);
++        closeBeforeHandoff();
++      }
++    });
++  }
++
++  /**
++   * Replaces both packet pipelines with one byte-forwarding handler per channel.
++   *
++   * <p>Both channels have paused reads. The target bootstrap writes have also
++   * completed. Codec removal cannot lose a packet at this boundary. The read
++   * timeout remains on each channel and continues to own idle failures.
++   *
++   * @param frontendChannel the client channel
++   * @param targetChannel the fixed target channel
++   */
++  static void installRawTunnel(Channel frontendChannel, Channel targetChannel) {
++    ChannelPipeline frontendPipeline = frontendChannel.pipeline();
++    removeIfPresent(frontendPipeline, LEGACY_PING_DECODER);
++    removeIfPresent(frontendPipeline, FRAME_DECODER);
++    removeIfPresent(frontendPipeline, MINECRAFT_DECODER);
++    removeIfPresent(frontendPipeline, LEGACY_PING_ENCODER);
++    removeIfPresent(frontendPipeline, FRAME_ENCODER);
++    removeIfPresent(frontendPipeline, MINECRAFT_ENCODER);
++    removeIfPresent(frontendPipeline, HANDLER);
++
++    ChannelPipeline targetPipeline = targetChannel.pipeline();
++    removeIfPresent(targetPipeline, FRAME_DECODER);
++    removeIfPresent(targetPipeline, MINECRAFT_DECODER);
++    removeIfPresent(targetPipeline, FLOW_HANDLER);
++    removeIfPresent(targetPipeline, FRAME_ENCODER);
++    removeIfPresent(targetPipeline, MINECRAFT_ENCODER);
++
++    frontendChannel.pipeline().addLast(
++        RawTunnelForwardHandler.HANDLER_NAME,
++        new RawTunnelForwardHandler(targetChannel));
++    targetChannel.pipeline().addLast(
++        RawTunnelForwardHandler.HANDLER_NAME,
++        new RawTunnelForwardHandler(frontendChannel));
++
++    targetChannel.config().setAutoRead(true);
++    targetChannel.read();
++    frontendChannel.config().setAutoRead(true);
++    frontendChannel.read();
++  }
++
++  private static void removeIfPresent(ChannelPipeline pipeline, String name) {
++    if (pipeline.context(name) != null) {
++      pipeline.remove(name);
++    }
++  }
++
++  /** Closes both channels after the owning validation or catch site records the cause. */
++  private void closeBeforeHandoff() {
++    Channel targetChannel = target;
++    target = null;
++    if (targetChannel != null) {
++      targetChannel.close().addListener(future -> {
++        if (!future.isSuccess()) {
++          Throwable cause = future.cause();
++          if (cause == null) {
++            logger.error(
++                "Cannot close raw target channel {} before handoff: close failed without a cause",
++                targetChannel);
++          } else {
++            logger.error("Cannot close raw target channel {} before handoff",
++                targetChannel, cause);
++          }
++        }
++      });
++    }
++    if (!frontend.isClosed()) {
++      inbound.disconnect(ConnectionMessages.INTERNAL_SERVER_CONNECTION_ERROR);
++    }
++  }
++
++  @Override
++  public void disconnected() {
++    if (target != null) {
++      Channel targetChannel = target;
++      target = null;
++      targetChannel.close().addListener(future -> {
++        if (!future.isSuccess()) {
++          Throwable cause = future.cause();
++          if (cause == null) {
++            logger.error(
++                "Cannot close raw target channel {} after frontend disconnect: "
++                    + "close failed without a cause",
++                targetChannel);
++          } else {
++            logger.error("Cannot close raw target channel {} after frontend disconnect",
++                targetChannel, cause);
++          }
++        }
++      });
++    }
++  }
++
++  @Override
++  public void handleUnknown(ByteBuf buffer) {
++    logger.error(
++        "Cannot continue raw handoff: unexpected pre-handoff buffer has {} readable bytes",
++        buffer.readableBytes());
++    closeBeforeHandoff();
++  }
++
++  @Override
++  public void exception(Throwable throwable) {
++    logger.error("Frontend connection failed before the FakePlayerProxy raw handoff", throwable);
++    closeBeforeHandoff();
++  }
++
++  @FunctionalInterface
++  interface TargetConnector {
++    ChannelFuture connect(EventLoop eventLoop, InetSocketAddress address);
++  }
++}
 diff --git a/proxy/src/main/java/com/velocitypowered/proxy/protocol/packet/EncryptionRequestPacket.java b/proxy/src/main/java/com/velocitypowered/proxy/protocol/packet/EncryptionRequestPacket.java
-index 422d5e11..51f59248 100644
+index 422d5e117c30d8690cef4ed9c82e4bc153bc5737..51f59248b97ce7ced294b79bea43541960b6f7d7 100644
 --- a/proxy/src/main/java/com/velocitypowered/proxy/protocol/packet/EncryptionRequestPacket.java
 +++ b/proxy/src/main/java/com/velocitypowered/proxy/protocol/packet/EncryptionRequestPacket.java
 @@ -62,7 +62,10 @@ public class EncryptionRequestPacket implements MinecraftPacket {
@@ -1159,7 +2190,7 @@ index 422d5e11..51f59248 100644
        if (version.noLessThan(ProtocolVersion.MINECRAFT_1_20_5)) {
          shouldAuthenticate = buf.readBoolean();
 diff --git a/proxy/src/main/java/com/velocitypowered/proxy/protocol/packet/EncryptionResponsePacket.java b/proxy/src/main/java/com/velocitypowered/proxy/protocol/packet/EncryptionResponsePacket.java
-index fedb67a5..9b14499a 100644
+index fedb67a5e3701451c32d0ae884c3c2b5badf6224..9b14499a9eace6105eafeecee05acb87d5389ea2 100644
 --- a/proxy/src/main/java/com/velocitypowered/proxy/protocol/packet/EncryptionResponsePacket.java
 +++ b/proxy/src/main/java/com/velocitypowered/proxy/protocol/packet/EncryptionResponsePacket.java
 @@ -39,6 +39,24 @@ public class EncryptionResponsePacket implements MinecraftPacket {
@@ -1188,7 +2219,7 @@ index fedb67a5..9b14499a 100644
      return sharedSecret.clone();
    }
 diff --git a/proxy/src/main/java/com/velocitypowered/proxy/protocol/packet/ServerLoginSuccessPacket.java b/proxy/src/main/java/com/velocitypowered/proxy/protocol/packet/ServerLoginSuccessPacket.java
-index 4b8e722a..2d0eae51 100644
+index 4b8e722a5b44bbae39c8b5f41e79c5d68628e02c..2d0eae5192b2474b4b1567f6319c98e9edf858d7 100644
 --- a/proxy/src/main/java/com/velocitypowered/proxy/protocol/packet/ServerLoginSuccessPacket.java
 +++ b/proxy/src/main/java/com/velocitypowered/proxy/protocol/packet/ServerLoginSuccessPacket.java
 @@ -73,6 +73,18 @@ public class ServerLoginSuccessPacket implements MinecraftPacket {
@@ -1212,10 +2243,10 @@ index 4b8e722a..2d0eae51 100644
      return "ServerLoginSuccess{"
 diff --git a/proxy/src/main/java/com/velocitypowered/proxy/protocol/util/FakePlayerProxyRelay.java b/proxy/src/main/java/com/velocitypowered/proxy/protocol/util/FakePlayerProxyRelay.java
 new file mode 100644
-index 00000000..227455b5
+index 0000000000000000000000000000000000000000..a62cc768d95158bafdd2ac75ec464fb8b502d768
 --- /dev/null
 +++ b/proxy/src/main/java/com/velocitypowered/proxy/protocol/util/FakePlayerProxyRelay.java
-@@ -0,0 +1,245 @@
+@@ -0,0 +1,248 @@
 +/*
 + * Copyright (C) 2018-2023 Velocity Contributors
 + *
@@ -1244,6 +2275,7 @@ index 00000000..227455b5
 +import java.security.PublicKey;
 +import java.security.interfaces.RSAPublicKey;
 +import java.util.Arrays;
++import java.util.HexFormat;
 +import javax.crypto.Cipher;
 +
 +/**
@@ -1269,9 +2301,8 @@ index 00000000..227455b5
 +  private static final byte VERSION = 1;
 +  private static final int MAX_TARGET_KEY_LENGTH = 512;
 +  private static final int MAX_RSA_PLAINTEXT_LENGTH = 117;
-+  private static final byte[] RSA_ENCRYPTION_OID = new byte[] {
-+      0x2A, (byte) 0x86, 0x48, (byte) 0x86, (byte) 0xF7, 0x0D, 0x01, 0x01, 0x01
-+  };
++  private static final byte[] RSA_ENCRYPTION_OID =
++      HexFormat.of().parseHex("2A864886F70D010101");
 +
 +  private FakePlayerProxyRelay() {
 +  }
@@ -1299,16 +2330,25 @@ index 00000000..227455b5
 +   */
 +  public static byte[] decoratePublicKey(PublicKey proxyPublicKey, byte[] targetPublicKey)
 +      throws GeneralSecurityException {
-+    if (!(proxyPublicKey instanceof RSAPublicKey rsaPublicKey)
-+        || targetPublicKey == null
-+        || targetPublicKey.length == 0
-+        || targetPublicKey.length > MAX_TARGET_KEY_LENGTH) {
-+      throw new GeneralSecurityException("Invalid relay public key");
++    if (!(proxyPublicKey instanceof RSAPublicKey rsaPublicKey)) {
++      String proxyKeyType = proxyPublicKey == null
++          ? "absent"
++          : proxyPublicKey.getClass().getName() + " (" + proxyPublicKey.getAlgorithm() + ")";
++      throw new GeneralSecurityException("Proxy public key type is not RSA: " + proxyKeyType);
 +    }
-+    parsePublicKey(targetPublicKey);
++    if (targetPublicKey == null) {
++      throw new GeneralSecurityException("Target public key is absent");
++    }
++    if (targetPublicKey.length == 0 || targetPublicKey.length > MAX_TARGET_KEY_LENGTH) {
++      throw new GeneralSecurityException(
++          "Target public key encoded length is " + targetPublicKey.length
++              + "; expected 1.." + MAX_TARGET_KEY_LENGTH + " bytes");
++    }
++    parsePublicKey(targetPublicKey, "target");
 +
 +    // The carrier contains public routing data only. It never contains K or credentials.
-+    ByteArrayOutputStream envelope = new ByteArrayOutputStream();
++    ByteArrayOutputStream envelope = new ByteArrayOutputStream(
++        MAGIC.length + 1 + 5 + targetPublicKey.length);
 +    envelope.writeBytes(MAGIC);
 +    envelope.write(VERSION);
 +    writeVarInt(envelope, targetPublicKey.length);
@@ -1326,9 +2366,12 @@ index 00000000..227455b5
 +    byte[] decorated = derSequence(algorithmIdentifier, derValue(0x03, subjectPublicKey));
 +
 +    // Reject a provider that accepts the key but removes the carrier on re-encoding.
-+    PublicKey parsed = parsePublicKey(decorated);
++    PublicKey parsed = parsePublicKey(decorated, "decorated proxy carrier");
 +    if (!Arrays.equals(decorated, parsed.getEncoded())) {
-+      throw new GeneralSecurityException("RSA provider removed relay metadata");
++      byte[] parsedEncoding = parsed.getEncoded();
++      throw new GeneralSecurityException(
++          "RSA provider changed decorated proxy key encoding from " + decorated.length
++              + " bytes to " + (parsedEncoding == null ? "absent" : parsedEncoding.length));
 +    }
 +    return decorated;
 +  }
@@ -1343,19 +2386,27 @@ index 00000000..227455b5
 +   * @param response the challenge plaintext that Velocity decrypted
 +   * @param targetChallenge the challenge from the active target Server Hello
 +   * @return the exact response classification
-+   * @throws GeneralSecurityException if the acknowledgement cannot fit RSA-1024
 +   */
-+  public static ResponseKind classifyResponse(byte[] response, byte[] targetChallenge)
-+      throws GeneralSecurityException {
++  public static ResponseKind classifyResponse(byte[] response, byte[] targetChallenge) {
 +    if (response == null || targetChallenge == null) {
 +      return ResponseKind.INVALID;
 +    }
-+    if (java.security.MessageDigest.isEqual(response, targetChallenge)) {
++    if (Arrays.equals(response, targetChallenge)) {
 +      return ResponseKind.VANILLA;
 +    }
-+    return java.security.MessageDigest.isEqual(response, acknowledgement(targetChallenge))
-+        ? ResponseKind.MOD
-+        : ResponseKind.INVALID;
++    int challengeOffset = ACKNOWLEDGEMENT.length + 1;
++    if (response.length != challengeOffset + targetChallenge.length
++        || response.length > MAX_RSA_PLAINTEXT_LENGTH
++        || !Arrays.equals(
++            response, 0, ACKNOWLEDGEMENT.length,
++            ACKNOWLEDGEMENT, 0, ACKNOWLEDGEMENT.length)
++        || response[ACKNOWLEDGEMENT.length] != VERSION
++        || !Arrays.equals(
++            response, challengeOffset, response.length,
++            targetChallenge, 0, targetChallenge.length)) {
++      return ResponseKind.INVALID;
++    }
++    return ResponseKind.MOD;
 +  }
 +
 +  /**
@@ -1377,31 +2428,12 @@ index 00000000..227455b5
 +    return cipher.doFinal(value);
 +  }
 +
-+  /**
-+   * Builds the plaintext that proves Mod support to Velocity.
-+   *
-+   * <p>The value keeps the original challenge after the marker and version. This
-+   * prevents an acknowledgement for one target login from matching another login.
-+   * The RSA bound check prevents a late failure inside the packet constructor.
-+   */
-+  static byte[] acknowledgement(byte[] targetChallenge) throws GeneralSecurityException {
-+    if (targetChallenge == null
-+        || ACKNOWLEDGEMENT.length + 1 + targetChallenge.length > MAX_RSA_PLAINTEXT_LENGTH) {
-+      throw new GeneralSecurityException("Target challenge exceeds proxy RSA bound");
-+    }
-+    byte[] result = new byte[ACKNOWLEDGEMENT.length + 1 + targetChallenge.length];
-+    System.arraycopy(ACKNOWLEDGEMENT, 0, result, 0, ACKNOWLEDGEMENT.length);
-+    result[ACKNOWLEDGEMENT.length] = VERSION;
-+    System.arraycopy(targetChallenge, 0, result, ACKNOWLEDGEMENT.length + 1,
-+        targetChallenge.length);
-+    return result;
-+  }
-+
-+  private static PublicKey parsePublicKey(byte[] encoded) throws GeneralSecurityException {
++  private static PublicKey parsePublicKey(byte[] encoded, String stage)
++      throws GeneralSecurityException {
 +    try {
 +      return parseRsaPublicKey(encoded);
 +    } catch (IllegalArgumentException exception) {
-+      throw new GeneralSecurityException("Invalid RSA public key", exception);
++      throw new GeneralSecurityException("Unable to parse " + stage + " RSA public key", exception);
 +    }
 +  }
 +
@@ -1430,7 +2462,8 @@ index 00000000..227455b5
 +  }
 +
 +  private static byte[] derValue(int tag, byte[] value) {
-+    ByteArrayOutputStream output = new ByteArrayOutputStream();
++    ByteArrayOutputStream output =
++        new ByteArrayOutputStream(2 + Integer.BYTES + value.length);
 +    output.write(tag);
 +    writeDerLength(output, value.length);
 +    output.writeBytes(value);
@@ -1442,7 +2475,8 @@ index 00000000..227455b5
 +      output.write(length);
 +      return;
 +    }
-+    int byteCount = (Integer.SIZE - Integer.numberOfLeadingZeros(length) + 7) / 8;
++    int byteCount = Math.ceilDiv(
++        Integer.SIZE - Integer.numberOfLeadingZeros(length), Byte.SIZE);
 +    output.write(0x80 | byteCount);
 +    for (int shift = (byteCount - 1) * 8; shift >= 0; shift -= 8) {
 +      output.write(length >>> shift);
@@ -1461,12 +2495,288 @@ index 00000000..227455b5
 +    INVALID
 +  }
 +}
+diff --git a/proxy/src/test/java/com/velocitypowered/proxy/connection/client/FakePlayerProxyTransferTunnelTest.java b/proxy/src/test/java/com/velocitypowered/proxy/connection/client/FakePlayerProxyTransferTunnelTest.java
+new file mode 100644
+index 0000000000000000000000000000000000000000..f8ea1207a777f045c9f91db40257f73dae49d1e7
+--- /dev/null
++++ b/proxy/src/test/java/com/velocitypowered/proxy/connection/client/FakePlayerProxyTransferTunnelTest.java
+@@ -0,0 +1,270 @@
++/*
++ * Copyright (C) 2018-2023 Velocity Contributors
++ *
++ * This program is free software: you can redistribute it and/or modify
++ * it under the terms of the GNU General Public License as published by
++ * the Free Software Foundation, either version 3 of the License, or
++ * (at your option) any later version.
++ *
++ * This program is distributed in the hope that it will be useful,
++ * but WITHOUT ANY WARRANTY; without even the implied warranty of
++ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
++ * GNU General Public License for more details.
++ *
++ * You should have received a copy of the GNU General Public License
++ * along with this program.  If not, see <https://www.gnu.org/licenses/>.
++ */
++
++package com.velocitypowered.proxy.connection.client;
++
++import static com.velocitypowered.proxy.network.Connections.FLOW_HANDLER;
++import static com.velocitypowered.proxy.network.Connections.FRAME_DECODER;
++import static com.velocitypowered.proxy.network.Connections.FRAME_ENCODER;
++import static com.velocitypowered.proxy.network.Connections.HANDLER;
++import static com.velocitypowered.proxy.network.Connections.MINECRAFT_DECODER;
++import static com.velocitypowered.proxy.network.Connections.MINECRAFT_ENCODER;
++import static org.junit.jupiter.api.Assertions.assertArrayEquals;
++import static org.junit.jupiter.api.Assertions.assertEquals;
++import static org.junit.jupiter.api.Assertions.assertFalse;
++import static org.junit.jupiter.api.Assertions.assertInstanceOf;
++import static org.mockito.Mockito.mock;
++import static org.mockito.Mockito.when;
++
++import com.velocitypowered.api.network.HandshakeIntent;
++import com.velocitypowered.api.network.ProtocolVersion;
++import com.velocitypowered.api.proxy.server.RegisteredServer;
++import com.velocitypowered.api.proxy.server.ServerInfo;
++import com.velocitypowered.proxy.VelocityServer;
++import com.velocitypowered.proxy.config.VelocityConfiguration;
++import com.velocitypowered.proxy.connection.MinecraftConnection;
++import com.velocitypowered.proxy.protocol.ProtocolUtils;
++import com.velocitypowered.proxy.protocol.StateRegistry;
++import com.velocitypowered.proxy.protocol.netty.AutoReadHolderHandler;
++import com.velocitypowered.proxy.protocol.netty.MinecraftDecoder;
++import com.velocitypowered.proxy.protocol.netty.MinecraftEncoder;
++import com.velocitypowered.proxy.protocol.netty.MinecraftVarintFrameDecoder;
++import com.velocitypowered.proxy.protocol.netty.MinecraftVarintLengthEncoder;
++import com.velocitypowered.proxy.protocol.packet.DisconnectPacket;
++import com.velocitypowered.proxy.protocol.packet.HandshakePacket;
++import com.velocitypowered.proxy.protocol.packet.ServerLoginPacket;
++import io.netty.buffer.ByteBuf;
++import io.netty.buffer.ByteBufUtil;
++import io.netty.buffer.Unpooled;
++import io.netty.channel.DefaultChannelPromise;
++import io.netty.channel.embedded.EmbeddedChannel;
++import io.netty.util.ReferenceCountUtil;
++import java.net.ConnectException;
++import java.net.InetSocketAddress;
++import java.util.List;
++import java.util.Optional;
++import java.util.UUID;
++import java.util.concurrent.atomic.AtomicReference;
++import org.junit.jupiter.api.Test;
++
++/**
++ * Exercises the framed Transfer bootstrap and the raw byte handoff.
++ *
++ * <p>The test uses the production packet codecs and session handlers. A test
++ * connector supplies an embedded target channel at the outbound connect boundary.
++ */
++class FakePlayerProxyTransferTunnelTest {
++
++  private static final ProtocolVersion VERSION = ProtocolVersion.MINECRAFT_26_2;
++  private static final InetSocketAddress TARGET_ADDRESS =
++      InetSocketAddress.createUnresolved("target.example", 25566);
++
++  @Test
++  void rewritesTransferBootstrapAndForwardsRawBytes() {
++    EmbeddedChannel target = createTargetChannel();
++    AtomicReference<InetSocketAddress> selectedAddress = new AtomicReference<>();
++    Harness harness = createFrontend((eventLoop, address) -> {
++      selectedAddress.set(address);
++      target.config().setAutoRead(false);
++      return new DefaultChannelPromise(target, eventLoop).setSuccess();
++    });
++    ClientFrames clientFrames = createClientFrames();
++
++    harness.frontend.writeInbound(clientFrames.handshake);
++    runTasks(harness.frontend, target);
++    assertEquals(StateRegistry.LOGIN, harness.connection.getState());
++    assertInstanceOf(
++        TransferTunnelLoginSessionHandler.class,
++        harness.connection.getActiveSessionHandler());
++    harness.frontend.writeInbound(clientFrames.login);
++    runTasks(harness.frontend, target);
++
++    assertEquals(TARGET_ADDRESS, selectedAddress.get());
++    ByteBuf targetHandshakeFrame = readFrame(target);
++    ByteBuf targetLoginFrame = readFrame(target);
++    TargetBootstrap targetBootstrap = decodeTargetBootstrap(
++        targetHandshakeFrame, targetLoginFrame);
++    assertEquals(HandshakeIntent.LOGIN, targetBootstrap.handshake.getIntent());
++    assertEquals(VERSION, targetBootstrap.handshake.getProtocolVersion());
++    assertEquals("gateway.example", targetBootstrap.handshake.getServerAddress());
++    assertEquals(25565, targetBootstrap.handshake.getPort());
++    assertEquals("TunnelUser", targetBootstrap.login.getUsername());
++    assertEquals(clientFrames.holderUuid, targetBootstrap.login.getHolderUuid());
++
++    byte[] clientBytes = new byte[] {0x12, 0x34, 0x56};
++    harness.frontend.writeInbound(Unpooled.wrappedBuffer(clientBytes));
++    runTasks(harness.frontend, target);
++    ByteBuf targetRaw = assertInstanceOf(ByteBuf.class, target.readOutbound());
++    assertArrayEquals(clientBytes, ByteBufUtil.getBytes(targetRaw));
++    ReferenceCountUtil.release(targetRaw);
++
++    byte[] targetBytes = new byte[] {(byte) 0xA1, (byte) 0xB2};
++    target.writeInbound(Unpooled.wrappedBuffer(targetBytes));
++    runTasks(harness.frontend, target);
++    ByteBuf frontendRaw = assertInstanceOf(ByteBuf.class, harness.frontend.readOutbound());
++    assertArrayEquals(targetBytes, ByteBufUtil.getBytes(frontendRaw));
++    ReferenceCountUtil.release(frontendRaw);
++
++    harness.frontend.close();
++    runTasks(harness.frontend, target);
++    assertFalse(target.isActive());
++
++    harness.frontend.finishAndReleaseAll();
++    target.finishAndReleaseAll();
++  }
++
++  @Test
++  void sendsLoginDisconnectWhenTargetConnectFails() {
++    EmbeddedChannel failedTarget = new EmbeddedChannel();
++    Harness harness = createFrontend((eventLoop, address) ->
++        new DefaultChannelPromise(failedTarget, eventLoop)
++            .setFailure(new ConnectException("test failure")));
++    ClientFrames clientFrames = createClientFrames();
++
++    harness.frontend.writeInbound(clientFrames.handshake);
++    runTasks(harness.frontend, failedTarget);
++    assertEquals(StateRegistry.LOGIN, harness.connection.getState());
++    harness.frontend.writeInbound(clientFrames.login);
++    runTasks(harness.frontend, failedTarget);
++
++    ByteBuf disconnectFrame = readFrame(harness.frontend);
++    assertInstanceOf(
++        DisconnectPacket.class,
++        decodeLoginPacket(disconnectFrame, ProtocolUtils.Direction.CLIENTBOUND));
++    assertFalse(harness.frontend.isActive());
++    assertFalse(failedTarget.isActive());
++
++    harness.frontend.finishAndReleaseAll();
++    failedTarget.finishAndReleaseAll();
++  }
++
++  private static Harness createFrontend(
++      TransferTunnelLoginSessionHandler.TargetConnector connector) {
++    VelocityServer server = mock(VelocityServer.class);
++    VelocityConfiguration configuration = mock(VelocityConfiguration.class);
++    RegisteredServer target = mock(RegisteredServer.class);
++    when(server.getConfiguration()).thenReturn(configuration);
++    when(configuration.getAttemptConnectionOrder()).thenReturn(List.of("target", "unused"));
++    when(server.getServer("target")).thenReturn(Optional.of(target));
++    when(target.getServerInfo()).thenReturn(new ServerInfo("target", TARGET_ADDRESS));
++
++    EmbeddedChannel frontend = new EmbeddedChannel();
++    frontend.pipeline()
++        .addLast(FRAME_DECODER,
++            new MinecraftVarintFrameDecoder(ProtocolUtils.Direction.SERVERBOUND))
++        .addLast(FRAME_ENCODER, MinecraftVarintLengthEncoder.INSTANCE)
++        .addLast(MINECRAFT_DECODER,
++            new MinecraftDecoder(ProtocolUtils.Direction.SERVERBOUND))
++        .addLast(MINECRAFT_ENCODER,
++            new MinecraftEncoder(ProtocolUtils.Direction.CLIENTBOUND));
++    MinecraftConnection connection = new MinecraftConnection(frontend, server);
++    connection.setActiveSessionHandler(StateRegistry.HANDSHAKE,
++        new HandshakeSessionHandler(connection, server, connector));
++    frontend.pipeline().addLast(HANDLER, connection);
++    return new Harness(frontend, connection);
++  }
++
++  private static EmbeddedChannel createTargetChannel() {
++    EmbeddedChannel target = new EmbeddedChannel();
++    target.pipeline()
++        .addLast(FRAME_DECODER,
++            new MinecraftVarintFrameDecoder(ProtocolUtils.Direction.CLIENTBOUND))
++        .addLast(FRAME_ENCODER, MinecraftVarintLengthEncoder.INSTANCE)
++        .addLast(MINECRAFT_DECODER,
++            new MinecraftDecoder(ProtocolUtils.Direction.CLIENTBOUND))
++        .addLast(FLOW_HANDLER, new AutoReadHolderHandler())
++        .addLast(MINECRAFT_ENCODER,
++            new MinecraftEncoder(ProtocolUtils.Direction.SERVERBOUND));
++    return target;
++  }
++
++  private static ClientFrames createClientFrames() {
++    HandshakePacket handshake = new HandshakePacket();
++    handshake.setProtocolVersion(VERSION);
++    handshake.setServerAddress("gateway.example");
++    handshake.setPort(25565);
++    handshake.setIntent(HandshakeIntent.TRANSFER);
++    UUID holderUuid = UUID.fromString("12345678-1234-5678-1234-567812345678");
++    ServerLoginPacket login = new ServerLoginPacket("TunnelUser", holderUuid);
++
++    MinecraftEncoder encoder = new MinecraftEncoder(ProtocolUtils.Direction.SERVERBOUND);
++    encoder.setProtocolVersion(VERSION);
++    EmbeddedChannel channel = new EmbeddedChannel(
++        MinecraftVarintLengthEncoder.INSTANCE, encoder);
++    channel.writeOutbound(handshake);
++    ByteBuf handshakeFrame = readFrame(channel);
++    encoder.setState(StateRegistry.LOGIN);
++    channel.writeOutbound(login);
++    ByteBuf loginFrame = readFrame(channel);
++    channel.finishAndReleaseAll();
++    return new ClientFrames(handshakeFrame, loginFrame, holderUuid);
++  }
++
++  private static TargetBootstrap decodeTargetBootstrap(
++      ByteBuf handshakeFrame, ByteBuf loginFrame) {
++    MinecraftDecoder decoder = new MinecraftDecoder(ProtocolUtils.Direction.SERVERBOUND);
++    decoder.setProtocolVersion(VERSION);
++    EmbeddedChannel channel = new EmbeddedChannel(
++        new MinecraftVarintFrameDecoder(ProtocolUtils.Direction.SERVERBOUND), decoder);
++    channel.writeInbound(handshakeFrame);
++    HandshakePacket handshake = assertInstanceOf(HandshakePacket.class, channel.readInbound());
++    decoder.setState(StateRegistry.LOGIN);
++    channel.writeInbound(loginFrame);
++    ServerLoginPacket login = assertInstanceOf(ServerLoginPacket.class, channel.readInbound());
++    channel.finishAndReleaseAll();
++    return new TargetBootstrap(handshake, login);
++  }
++
++  private static Object decodeLoginPacket(ByteBuf frame, ProtocolUtils.Direction direction) {
++    MinecraftDecoder decoder = new MinecraftDecoder(direction);
++    decoder.setProtocolVersion(VERSION);
++    decoder.setState(StateRegistry.LOGIN);
++    EmbeddedChannel channel = new EmbeddedChannel(
++        new MinecraftVarintFrameDecoder(direction), decoder);
++    channel.writeInbound(frame);
++    Object packet = channel.readInbound();
++    channel.finishAndReleaseAll();
++    return packet;
++  }
++
++  private static void runTasks(EmbeddedChannel first, EmbeddedChannel second) {
++    for (int index = 0; index < 8; index++) {
++      first.runPendingTasks();
++      second.runPendingTasks();
++    }
++  }
++
++  private static ByteBuf readFrame(EmbeddedChannel channel) {
++    ByteBuf length = assertInstanceOf(ByteBuf.class, channel.readOutbound());
++    ByteBuf body = assertInstanceOf(ByteBuf.class, channel.readOutbound());
++    ByteBuf frame = Unpooled.buffer(length.readableBytes() + body.readableBytes());
++    frame.writeBytes(length);
++    frame.writeBytes(body);
++    ReferenceCountUtil.release(length);
++    ReferenceCountUtil.release(body);
++    return frame;
++  }
++
++  private record Harness(EmbeddedChannel frontend, MinecraftConnection connection) {
++  }
++
++  private record ClientFrames(ByteBuf handshake, ByteBuf login, UUID holderUuid) {
++  }
++
++  private record TargetBootstrap(HandshakePacket handshake, ServerLoginPacket login) {
++  }
++}
 diff --git a/proxy/src/test/java/com/velocitypowered/proxy/protocol/util/FakePlayerProxyRelayTest.java b/proxy/src/test/java/com/velocitypowered/proxy/protocol/util/FakePlayerProxyRelayTest.java
 new file mode 100644
-index 00000000..dc1a07aa
+index 0000000000000000000000000000000000000000..8e07b1d44da3091f54f262cf305c7553fd5a9e6e
 --- /dev/null
 +++ b/proxy/src/test/java/com/velocitypowered/proxy/protocol/util/FakePlayerProxyRelayTest.java
-@@ -0,0 +1,93 @@
+@@ -0,0 +1,97 @@
 +/*
 + * Copyright (C) 2018-2023 Velocity Contributors
 + *
@@ -1492,6 +2802,7 @@ index 00000000..dc1a07aa
 +import static org.junit.jupiter.api.Assertions.assertThrows;
 +
 +import com.velocitypowered.proxy.crypto.EncryptionUtils;
++import java.nio.charset.StandardCharsets;
 +import java.security.GeneralSecurityException;
 +import java.security.KeyPair;
 +import java.util.Arrays;
@@ -1527,9 +2838,15 @@ index 00000000..dc1a07aa
 +
 +    // The client parses that key and sends its AES key with the Mod acknowledgement.
 +    var parsedProxyKey = EncryptionUtils.parseRsaPublicKey(decoratedKey);
++    byte[] acknowledgement = new byte["FPPACK".length() + 1 + challenge.length];
++    System.arraycopy("FPPACK".getBytes(StandardCharsets.US_ASCII), 0,
++        acknowledgement, 0, "FPPACK".length());
++    acknowledgement["FPPACK".length()] = 1;
++    System.arraycopy(challenge, 0, acknowledgement, "FPPACK".length() + 1,
++        challenge.length);
 +    byte[] encryptedSecret = FakePlayerProxyRelay.encryptRsa(parsedProxyKey, secret);
 +    byte[] encryptedAck = FakePlayerProxyRelay.encryptRsa(
-+        parsedProxyKey, FakePlayerProxyRelay.acknowledgement(challenge));
++        parsedProxyKey, acknowledgement);
 +    byte[] recoveredSecret = decryptRsa(proxyKeyPair, encryptedSecret);
 +    byte[] recoveredAck = decryptRsa(proxyKeyPair, encryptedAck);
 +
@@ -1553,9 +2870,6 @@ index 00000000..dc1a07aa
 +
 +  @Test
 +  void enforcesCarrierBounds() throws GeneralSecurityException {
-+    assertEquals(117, FakePlayerProxyRelay.acknowledgement(new byte[110]).length);
-+    assertThrows(GeneralSecurityException.class,
-+        () -> FakePlayerProxyRelay.acknowledgement(new byte[111]));
 +    assertThrows(GeneralSecurityException.class,
 +        () -> FakePlayerProxyRelay.decoratePublicKey(proxyKeyPair.getPublic(), new byte[513]));
 +  }

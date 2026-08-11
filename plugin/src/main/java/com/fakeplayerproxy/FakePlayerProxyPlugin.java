@@ -87,7 +87,7 @@ public final class FakePlayerProxyPlugin {
 
     @Subscribe
     public void onServerPostConnect(ServerPostConnectEvent event) {
-        event.getPlayer().sendMessage(Component.text(
-                "[FakePlayerProxy] AES encryption/decryption verified.", NamedTextColor.GREEN));
+        event.getPlayer().sendMessage(Component.translatable(
+                "fakeplayerproxy.message.encryption_verified", NamedTextColor.GREEN));
     }
 }

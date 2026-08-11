@@ -3,6 +3,7 @@ package com.fakeplayerproxy.mod.packets;
 import java.nio.charset.StandardCharsets;
 import java.security.PublicKey;
 import java.util.Arrays;
+import java.util.HexFormat;
 import java.util.Optional;
 import net.minecraft.util.Crypt;
 import net.minecraft.util.CryptException;
@@ -16,10 +17,9 @@ import org.jetbrains.annotations.NotNull;
  * subject key contains the proxy modulus and exponent. Its AlgorithmIdentifier
  * parameter contains the protocol marker and the original target SPKI.
  *
- * <p>An ordinary RSA key returns {@link Status#PASSTHROUGH}. Minecraft then uses
- * its original login flow without changed arguments. A valid carrier returns the
- * target key. The Mixin uses that key for the Mojang session digest, but it keeps
- * the proxy key for the standard key response.
+ * <p>A valid carrier returns the original target key. An ordinary RSA key or
+ * malformed carrier returns an empty value, so Minecraft keeps its original
+ * login flow without changed arguments.
  *
  * <p>This design keeps both login packets standard. It also avoids a custom
  * payload and leaves connections to ordinary servers unchanged. SunRsaSign must
@@ -33,36 +33,40 @@ public final class ServerHelloPacketEnvelope {
     private static final byte VERSION = 1;
     private static final int MAX_TARGET_KEY_LENGTH = 512;
     private static final int MAX_RSA_PLAINTEXT_LENGTH = 117;
-    private static final byte[] RSA_ENCRYPTION_OID = new byte[] {
-        0x2A, (byte) 0x86, 0x48, (byte) 0x86, (byte) 0xF7, 0x0D, 0x01, 0x01, 0x01
-    };
+    private static final byte[] RSA_ENCRYPTION_OID =
+            HexFormat.of().parseHex("2A864886F70D010101");
 
     private ServerHelloPacketEnvelope() {
     }
 
     /**
-     * Classifies the received key and extracts the original target key.
+     * Decodes the original target key from a supported Server Hello.
      *
-     * <p>The method returns passthrough before it applies relay rules to an
-     * ordinary RSA key. If the key declares the relay marker, malformed relay
-     * data becomes invalid. This distinction protects ordinary server behavior
-     * and rejects a damaged relay request.
+     * <p>The decoder validates the complete carrier before it returns a key.
+     * An empty result covers both an ordinary key and malformed carrier data.
+     * The caller therefore preserves Minecraft's original login behavior when
+     * the proxy protocol cannot be used.
      *
      * @param proxyPublicKey the JCA key from the Server Hello
-     * @return the classification and the target key for a supported carrier
+     * @return the target key for a supported carrier, or an empty value
      */
-    public static @NotNull Inspection inspect(@NotNull PublicKey proxyPublicKey) {
+    public static @NotNull Optional<PublicKey> decodeTargetPublicKey(
+            PublicKey proxyPublicKey) {
+        if (proxyPublicKey == null) {
+            return Optional.empty();
+        }
+
         // The PublicKey interface does not expose AlgorithmIdentifier parameters.
         // Read the preserved SPKI bytes to get the relay carrier.
         byte[] encoded = proxyPublicKey.getEncoded();
         if (encoded == null) {
-            return Inspection.invalid(null);
+            return Optional.empty();
         }
 
         DerReader outer = new DerReader(encoded);
         byte[] subjectPublicKeyInfo = outer.readValue(0x30);
         if (subjectPublicKeyInfo == null || outer.hasRemaining()) {
-            return Inspection.passthrough();
+            return Optional.empty();
         }
 
         DerReader subjectReader = new DerReader(subjectPublicKeyInfo);
@@ -71,7 +75,7 @@ public final class ServerHelloPacketEnvelope {
         if (algorithmIdentifier == null
                 || subjectPublicKey == null
                 || subjectReader.hasRemaining()) {
-            return Inspection.passthrough();
+            return Optional.empty();
         }
 
         DerReader algorithmReader = new DerReader(algorithmIdentifier);
@@ -79,17 +83,17 @@ public final class ServerHelloPacketEnvelope {
         byte[] envelope = algorithmReader.readValue(0x04);
         // An ordinary RSA key uses NULL parameters. It must keep the Minecraft flow.
         if (envelope == null || !startsWith(envelope)) {
-            return Inspection.passthrough();
+            return Optional.empty();
         }
         if (oid == null
                 || !Arrays.equals(oid, RSA_ENCRYPTION_OID)
                 || algorithmReader.hasRemaining()) {
-            return Inspection.invalid(null);
+            return Optional.empty();
         }
 
         int offset = MAGIC.length;
         if (offset >= envelope.length || envelope[offset++] != VERSION) {
-            return Inspection.invalid(null);
+            return Optional.empty();
         }
 
         VarInt targetLength = readVarInt(envelope, offset);
@@ -97,7 +101,7 @@ public final class ServerHelloPacketEnvelope {
                 || targetLength.value() <= 0
                 || targetLength.value() > MAX_TARGET_KEY_LENGTH
                 || targetLength.nextOffset() + targetLength.value() != envelope.length) {
-            return Inspection.invalid(null);
+            return Optional.empty();
         }
 
         byte[] targetKeyBytes = Arrays.copyOfRange(
@@ -106,11 +110,11 @@ public final class ServerHelloPacketEnvelope {
             // Validate the embedded SPKI now. The Mixin receives a usable JCA key.
             PublicKey targetPublicKey = Crypt.byteToPublicKey(targetKeyBytes);
             if (!"RSA".equals(targetPublicKey.getAlgorithm())) {
-                return Inspection.invalid(null);
+                return Optional.empty();
             }
-            return Inspection.supported(targetPublicKey);
-        } catch (CryptException exception) {
-            return Inspection.invalid(exception);
+            return Optional.of(targetPublicKey);
+        } catch (CryptException _) {
+            return Optional.empty();
         }
     }
 
@@ -128,8 +132,9 @@ public final class ServerHelloPacketEnvelope {
      * @param challenge the original target challenge
      * @return the acknowledgement, or an empty result when it exceeds the bound
      */
-    public static @NotNull Optional<byte[]> acknowledgement(byte @NotNull [] challenge) {
-        if (ACKNOWLEDGEMENT.length + 1 + challenge.length > MAX_RSA_PLAINTEXT_LENGTH) {
+    public static @NotNull Optional<byte[]> acknowledgement(byte[] challenge) {
+        if (challenge == null
+                || ACKNOWLEDGEMENT.length + 1 + challenge.length > MAX_RSA_PLAINTEXT_LENGTH) {
             return Optional.empty();
         }
 
@@ -141,15 +146,8 @@ public final class ServerHelloPacketEnvelope {
     }
 
     private static boolean startsWith(byte @NotNull [] value) {
-        if (value.length < MAGIC.length) {
-            return false;
-        }
-        for (int index = 0; index < MAGIC.length; index++) {
-            if (value[index] != MAGIC[index]) {
-                return false;
-            }
-        }
-        return true;
+        return value.length >= MAGIC.length
+                && Arrays.equals(value, 0, MAGIC.length, MAGIC, 0, MAGIC.length);
     }
 
     private static VarInt readVarInt(byte @NotNull [] input, int offset) {
@@ -170,63 +168,8 @@ public final class ServerHelloPacketEnvelope {
     }
 
     private static int varIntSize(int value) {
-        int size = 1;
-        while ((value & ~0x7F) != 0) {
-            value >>>= 7;
-            size++;
-        }
-        return size;
-    }
-
-    public enum Status {
-        PASSTHROUGH,
-        SUPPORTED,
-        INVALID
-    }
-
-    /**
-     * Carries the result of one Server Hello inspection.
-     *
-     * <p>Passthrough and invalid results do not expose a target key. An invalid
-     * result can retain the parsing failure for the client log.
-     */
-    public static final class Inspection {
-        private final Status status;
-        private final PublicKey targetPublicKey;
-        private final Throwable failure;
-
-        private Inspection(
-                @NotNull Status status,
-                PublicKey targetPublicKey,
-                Throwable failure) {
-            this.status = status;
-            this.targetPublicKey = targetPublicKey;
-            this.failure = failure;
-        }
-
-        private static @NotNull Inspection passthrough() {
-            return new Inspection(Status.PASSTHROUGH, null, null);
-        }
-
-        private static @NotNull Inspection supported(@NotNull PublicKey targetPublicKey) {
-            return new Inspection(Status.SUPPORTED, targetPublicKey, null);
-        }
-
-        private static @NotNull Inspection invalid(Throwable failure) {
-            return new Inspection(Status.INVALID, null, failure);
-        }
-
-        public @NotNull Status status() {
-            return this.status;
-        }
-
-        public PublicKey targetPublicKey() {
-            return this.targetPublicKey;
-        }
-
-        public Throwable failure() {
-            return this.failure;
-        }
+        int bitCount = Integer.SIZE - Integer.numberOfLeadingZeros(value);
+        return Math.max(1, Math.ceilDiv(bitCount, 7));
     }
 
     private record VarInt(int value, int nextOffset) {

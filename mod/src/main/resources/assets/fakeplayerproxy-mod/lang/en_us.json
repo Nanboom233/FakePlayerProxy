@@ -1,0 +1,9 @@
+{
+  "fakeplayerproxy.consent.title": "Allow proxy connection?",
+  "fakeplayerproxy.consent.body": "This server is requesting permission to proxy your connection. If allowed, the server can decrypt, inspect, and modify game data sent over this connection. Server address: %s. Your Minecraft access token is not sent to the server. If you decline, the client will use standard Minecraft encryption and the server will only transparently forward the encrypted TCP traffic.",
+  "fakeplayerproxy.consent.warning": "Only allow proxying on servers you trust!",
+  "fakeplayerproxy.consent.allow": "Allow",
+  "fakeplayerproxy.consent.decline": "Decline",
+  "fakeplayerproxy.disconnect.proxy_connection_failed": "Unable to continue the proxy connection. Please try again.",
+  "fakeplayerproxy.message.encryption_verified": "[FakePlayerProxy] AES encryption/decryption verified."
+}

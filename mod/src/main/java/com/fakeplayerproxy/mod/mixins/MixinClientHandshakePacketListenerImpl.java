@@ -1,15 +1,28 @@
 package com.fakeplayerproxy.mod.mixins;
 
 import com.fakeplayerproxy.mod.FakePlayerProxyMod;
+import com.fakeplayerproxy.mod.gui.FakePlayerProxyConsentScreen;
 import com.fakeplayerproxy.mod.packets.ServerHelloPacketEnvelope;
+import com.llamalad7.mixinextras.sugar.Local;
+import java.math.BigInteger;
 import java.security.PublicKey;
-import java.util.Objects;
+import java.util.Optional;
+import javax.crypto.Cipher;
+import javax.crypto.SecretKey;
 
+import com.mojang.datafixers.util.Pair;
+import net.minecraft.client.Minecraft;
+import net.minecraft.client.gui.screens.ConnectScreen;
+import net.minecraft.client.gui.screens.Screen;
 import net.minecraft.client.multiplayer.ClientHandshakePacketListenerImpl;
+import net.minecraft.client.multiplayer.ServerData;
 import net.minecraft.network.Connection;
 import net.minecraft.network.chat.Component;
 import net.minecraft.network.protocol.login.ClientboundHelloPacket;
+import net.minecraft.network.protocol.login.ServerboundKeyPacket;
+import net.minecraft.util.Crypt;
 import net.minecraft.util.CryptException;
+import net.minecraft.util.Util;
 import org.jetbrains.annotations.NotNull;
 import org.spongepowered.asm.mixin.Final;
 import org.spongepowered.asm.mixin.Mixin;
@@ -17,138 +30,229 @@ import org.spongepowered.asm.mixin.Shadow;
 import org.spongepowered.asm.mixin.Unique;
 import org.spongepowered.asm.mixin.injection.At;
 import org.spongepowered.asm.mixin.injection.Inject;
-import org.spongepowered.asm.mixin.injection.ModifyArg;
 import org.spongepowered.asm.mixin.injection.callback.CallbackInfo;
 
 /**
- * Connects the decorated Server Hello to Minecraft's normal login code.
+ * Adds one consent gate to Minecraft's login listener.
  *
- * <p>The head hook inspects the public key once. An ordinary key leaves both
- * later argument hooks inactive. A supported key gives the first argument hook
- * the original target key for the Mojang session digest.
+ * <p>Minecraft enters its authorizing state and creates one AES key, both
+ * ciphers, the proxy digest, and the original response arguments. The injection
+ * then stops a supported Server Hello immediately before Minecraft constructs
+ * and sends its key response.
  *
- * <p>The second argument hook keeps the proxy key and client-generated AES key
- * in the standard key packet. It changes only the challenge plaintext to the
- * Mod acknowledgement. Velocity can then recover the AES key and relay the same
- * key to the target server.
- *
- * <p>The Mixin does not install encryption and does not send a custom packet.
- * Minecraft keeps ownership of packet send order and frontend cipher setup.
+ * <p>Allow selects the target digest and acknowledged response. Decline selects
+ * the original proxy digest and challenge. Both choices use the same generated
+ * key and ciphers, and both continue through Minecraft's authentication and
+ * encryption helpers. The target method enters only once.
  */
 @Mixin(ClientHandshakePacketListenerImpl.class)
 public abstract class MixinClientHandshakePacketListenerImpl {
-    @Shadow @Final private @NotNull Connection connection;
+    @Shadow @Final private Connection connection;
+    @Shadow @Final private Screen parent;
+    @Shadow @Final private ServerData serverData;
 
-    // These values belong to one handleHello call. The head hook clears old data.
-    @Unique
-    private PublicKey fakePlayerProxy$targetPublicKey;
+    @Shadow
+    private Component authenticateServer(String digest) {
+        return null;
+    }
 
-    @Unique
-    private byte[] fakePlayerProxy$acknowledgement;
+    @Shadow
+    private void setEncryption(
+            ServerboundKeyPacket setKeyPacket,
+            Cipher decryptCipher,
+            Cipher encryptCipher) {
+    }
 
     /**
-     * Inspects the Server Hello before Minecraft computes the session digest.
+     * Stops a supported Hello before authentication or a key response send.
      *
-     * <p>A malformed declared carrier cannot continue as an ordinary key. The
-     * hook logs its diagnostic cause and disconnects with a stable message.
-     * Ordinary malformed keys remain under Minecraft's existing error handling.
+     * <p>This exact Minecraft 26.2 boundary captures Vanilla's live login values
+     * before it constructs {@link ServerboundKeyPacket}. An empty target-key
+     * result leaves every Vanilla action unchanged. A supported carrier creates
+     * both encrypted choices from the same generated key, cancels the remaining
+     * method, and moves only the user decision to the game thread.
      */
-    @Inject(method = "handleHello", at = @At("HEAD"), cancellable = true)
-    private void fakePlayerProxy$inspectServerHello(
-            @NotNull ClientboundHelloPacket packet, @NotNull CallbackInfo callbackInfo) {
-        this.fakePlayerProxy$targetPublicKey = null;
-        this.fakePlayerProxy$acknowledgement = null;
+    @Inject(
+            method = "handleHello",
+            at = @At(
+                    value = "NEW",
+                    target = "net/minecraft/network/protocol/login/ServerboundKeyPacket"),
+            cancellable = true)
+    private void prepareConsentChoices(
+            ClientboundHelloPacket packet,
+            CallbackInfo callbackInfo,
+            @Local(name = "decryptCipher") Cipher decryptCipher,
+            @Local(name = "encryptCipher") Cipher encryptCipher,
+            @Local(name = "digest") String digest,
+            @Local(name = "secretKey") SecretKey secretKey,
+            @Local(name = "publicKey") PublicKey publicKey,
+            @Local(name = "challenge") byte[] challenge) {
+        Optional<PublicKey> targetPublicKey =
+                ServerHelloPacketEnvelope.decodeTargetPublicKey(publicKey);
+        if (targetPublicKey.isEmpty()) {
+            return;
+        }
+
+        Optional<byte[]> acknowledgement =
+                ServerHelloPacketEnvelope.acknowledgement(challenge);
+        if (acknowledgement.isEmpty()) {
+            callbackInfo.cancel();
+            if (challenge == null) {
+                FakePlayerProxyMod.LOGGER.error(
+                        "Cannot construct FPPACK response: target challenge is unavailable");
+            } else {
+                FakePlayerProxyMod.LOGGER.error(
+                        "Cannot construct FPPACK response: acknowledgement plaintext is {} bytes, "
+                                + "but RSA-1024 accepts at most 117 bytes",
+                        challenge.length + 7);
+            }
+            disconnectProxyConnection();
+            return;
+        }
+
+        PreparedLogin preparedLogin;
+        try {
+            var vanillaResponse =
+                    new ServerboundKeyPacket(secretKey, publicKey, challenge);
+            String relayDigest = new BigInteger(Crypt.digestData(
+                    packet.getServerId(), targetPublicKey.get(), secretKey)).toString(16);
+            var relayResponse = new ServerboundKeyPacket(
+                    secretKey, publicKey, acknowledgement.get());
+            preparedLogin = new PreparedLogin(
+                    Pair.of(digest, vanillaResponse),
+                    Pair.of(relayDigest, relayResponse),
+                    decryptCipher,
+                    encryptCipher,
+                    packet.shouldAuthenticate());
+        } catch (CryptException | RuntimeException exception) {
+            callbackInfo.cancel();
+            FakePlayerProxyMod.LOGGER.error(
+                    "Cannot prepare FakePlayerProxy login choices: digest or RSA response "
+                            + "construction failed",
+                    exception);
+            disconnectProxyConnection();
+            return;
+        }
+
+        callbackInfo.cancel();
+        try {
+            Minecraft.getInstance().execute(() -> openConsentScreen(preparedLogin));
+        } catch (RuntimeException exception) {
+            FakePlayerProxyMod.LOGGER.error(
+                    "Cannot schedule the FakePlayerProxy consent screen on the game thread",
+                    exception);
+            disconnectProxyConnection();
+        }
+    }
+
+    /**
+     * Replaces ConnectScreen only after the game thread receives the task.
+     *
+     * <p>The replacement screen delegates ticks to the current ConnectScreen.
+     * Its native BooleanConsumer receives the immutable prepared login. The
+     * separate Escape action closes the connection without authentication or a
+     * key response.
+     */
+    @Unique
+    private void openConsentScreen(@NotNull PreparedLogin preparedLogin) {
+        var minecraft = Minecraft.getInstance();
+        if (!this.connection.isConnected()) {
+            this.connection.handleDisconnection();
+            return;
+        }
+        Screen activeScreen = minecraft.gui.screen();
+        if (!(activeScreen instanceof ConnectScreen connectionScreen)) {
+            FakePlayerProxyMod.LOGGER.error(
+                    "Cannot show the FakePlayerProxy consent screen: active screen is {}",
+                    activeScreen == null ? "absent" : activeScreen.getClass().getName());
+            disconnectProxyConnection();
+            return;
+        }
 
         try {
-            PublicKey proxyPublicKey = packet.getPublicKey();
-            ServerHelloPacketEnvelope.Inspection inspection =
-                    ServerHelloPacketEnvelope.inspect(proxyPublicKey);
-            if (inspection.status() == ServerHelloPacketEnvelope.Status.PASSTHROUGH) {
-                return;
-            }
-            if (inspection.status() == ServerHelloPacketEnvelope.Status.INVALID) {
-                fakePlayerProxy$rejectInvalidEnvelope(inspection.failure(), callbackInfo);
-                return;
-            }
-
-            PublicKey targetPublicKey = inspection.targetPublicKey();
-            byte[] challenge = packet.getChallenge();
-            if (targetPublicKey == null) {
-                fakePlayerProxy$rejectInvalidEnvelope(null, callbackInfo);
-                return;
-            }
-            byte[] acknowledgement = ServerHelloPacketEnvelope
-                    .acknowledgement(challenge)
-                    .orElse(null);
-            if (acknowledgement == null) {
-                fakePlayerProxy$rejectInvalidEnvelope(null, callbackInfo);
-                return;
-            }
-
-            this.fakePlayerProxy$targetPublicKey = targetPublicKey;
-            this.fakePlayerProxy$acknowledgement = acknowledgement;
-        } catch (CryptException ignored) {
-            // This key did not expose a relay carrier. Minecraft owns its error path.
+            minecraft.gui.setScreen(new FakePlayerProxyConsentScreen(
+                    connectionScreen,
+                    String.valueOf(this.connection.getRemoteAddress()),
+                    allow -> continueLoginAfterConsent(connectionScreen, preparedLogin, allow),
+                    () -> {
+                        this.connection.disconnect(ConnectScreen.ABORT_CONNECTION);
+                        minecraft.gui.setScreen(this.parent);
+                    }));
+        } catch (RuntimeException exception) {
+            FakePlayerProxyMod.LOGGER.error(
+                    "Cannot install the FakePlayerProxy consent screen on the active connection",
+                    exception);
+            disconnectProxyConnection();
         }
     }
 
     /**
-     * Rejects a key that declares FakePlayerProxy but has invalid relay data.
+     * Restores ConnectScreen and continues one selected Vanilla login branch.
      *
-     * <p>The log keeps the parsing cause for diagnosis. The player receives no
-     * internal key data or exception text.
+     * <p>Allow selects the target digest and acknowledged response. Decline
+     * selects the proxy digest and original response. The callback extracts only
+     * the selected choice, so the unselected ciphertext can be released when
+     * this method returns.
      */
     @Unique
-    private void fakePlayerProxy$rejectInvalidEnvelope(
-            Throwable failure, @NotNull CallbackInfo callbackInfo) {
-        if (failure == null) {
-            FakePlayerProxyMod.LOGGER.error("Invalid FakePlayerProxy Server Hello envelope");
-        } else {
+    private void continueLoginAfterConsent(
+            @NotNull ConnectScreen connectionScreen,
+            @NotNull PreparedLogin preparedLogin,
+            boolean allow) {
+        Minecraft.getInstance().gui.setScreen(connectionScreen);
+        if (!this.connection.isConnected()) {
+            this.connection.handleDisconnection();
+            return;
+        }
+
+        Pair<String, ServerboundKeyPacket> choice = allow
+                ? preparedLogin.relayChoice()
+                : preparedLogin.vanillaChoice();
+        try {
+            if (preparedLogin.shouldAuthenticate()) {
+                Util.ioPool().execute(() -> {
+                    Component error = this.authenticateServer(choice.getFirst());
+                    if (error != null) {
+                        if (this.serverData == null || !this.serverData.isLan()) {
+                            this.connection.disconnect(error);
+                            return;
+                        }
+                        FakePlayerProxyMod.LOGGER.warn(error.getString());
+                    }
+
+                    this.setEncryption(
+                            choice.getSecond(),
+                            preparedLogin.decryptCipher(),
+                            preparedLogin.encryptCipher());
+                });
+            } else {
+                this.setEncryption(
+                        choice.getSecond(),
+                        preparedLogin.decryptCipher(),
+                        preparedLogin.encryptCipher());
+            }
+        } catch (RuntimeException exception) {
             FakePlayerProxyMod.LOGGER.error(
-                    "Invalid FakePlayerProxy Server Hello envelope", failure);
+                    "Cannot continue the selected FakePlayerProxy login: authentication "
+                            + "scheduling or encryption setup failed",
+                    exception);
+            disconnectProxyConnection();
         }
-        this.connection.disconnect(Component.literal(
-                "Unable to continue the proxy connection. Please try again."));
-        callbackInfo.cancel();
     }
 
-    /**
-     * Uses the target key only for the Mojang session digest.
-     *
-     * <p>The target server validates this digest against the real client session.
-     * The standard key response still uses the proxy key, which lets Velocity
-     * decrypt the client-generated AES key.
-     */
-    @ModifyArg(
-            method = "handleHello",
-            at = @At(
-                    value = "INVOKE",
-                    target = "Lnet/minecraft/util/Crypt;digestData(Ljava/lang/String;"
-                            + "Ljava/security/PublicKey;Ljavax/crypto/SecretKey;)[B"),
-            index = 1)
-    private @NotNull PublicKey fakePlayerProxy$useTargetJoinKey(
-            @NotNull PublicKey proxyPublicKey) {
-        return Objects.requireNonNullElse(this.fakePlayerProxy$targetPublicKey, proxyPublicKey);
+    /** Uses one localized action after the owning validation or catch site logs the cause. */
+    @Unique
+    private void disconnectProxyConnection() {
+        this.connection.disconnect(Component.translatable(
+                "fakeplayerproxy.disconnect.proxy_connection_failed"));
     }
 
-    /**
-     * Places the Mod acknowledgement in the standard encrypted challenge field.
-     *
-     * <p>The acknowledgement proves support and binds the response to the target
-     * challenge. The proxy public key and the AES key remain unchanged.
-     */
-    @ModifyArg(
-            method = "handleHello",
-            at = @At(
-                    value = "INVOKE",
-                    target = "Lnet/minecraft/network/protocol/login/ServerboundKeyPacket;<init>"
-                            + "(Ljavax/crypto/SecretKey;Ljava/security/PublicKey;[B)V"),
-            index = 2)
-    private byte @NotNull [] fakePlayerProxy$acknowledgeServerHello(
-            byte @NotNull [] challenge) {
-        if (this.fakePlayerProxy$acknowledgement == null) {
-            return challenge;
-        }
-        return this.fakePlayerProxy$acknowledgement.clone();
+    /** Keeps both user choices and their shared Vanilla continuation values. */
+    private record PreparedLogin(
+            @NotNull Pair<String, ServerboundKeyPacket> vanillaChoice,
+            @NotNull Pair<String, ServerboundKeyPacket> relayChoice,
+            @NotNull Cipher decryptCipher,
+            @NotNull Cipher encryptCipher,
+            boolean shouldAuthenticate) {
     }
 }
