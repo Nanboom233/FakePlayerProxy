@@ -1,0 +1,5 @@
+{"file":".trellis/spec/frontend/fabric-client-mod.md","reason":"Check consent ordering, Vanilla fallback, cleanup, annotations, and errors. The task owns the optional result and exact checks."}
+{"file":".trellis/spec/backend/velocity-plugin.md","reason":"Check protocol correctness and minimal ownership. Use only the exact production-path checks in implement.md."}
+{"file":".trellis/tasks/08-10-client-login-negotiation-research/research/conclusion.md","reason":"Check only its corrected call order and Transfer evidence. Ignore its historical probe inventory and use the current plan for validation."}
+{"file":".trellis/spec/language/java.md","reason":"Check only the confirmed annotation, local capture, i18n, diagnostics, value-shape, and method-extraction rules. Do not add source-shape tests."}
+{"file": ".trellis/tasks/08-10-client-login-negotiation-research/research/paper-connection-throttle.md", "reason": "Check the fixed four-second Transfer timing against the verified Paper behavior; do not add a dedicated timing or executor-shape test."}
