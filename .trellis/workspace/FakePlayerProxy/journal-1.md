@@ -29,3 +29,26 @@ Added the Trellis workflow, Gradle project structure, Velocity plugin, Minecraft
 ### Status
 
 [OK] **Completed**
+
+
+## Session 2: Client login negotiation and Vanilla fallback
+
+**Date**: 2026-08-11
+**Task**: Client login negotiation and Vanilla fallback
+**Branch**: `master`
+
+### Summary
+
+Added explicit Mod consent before the key response, Vanilla Transfer fallback into a delayed raw tunnel, localized client-facing text, focused production-logic validation, and the supporting Trellis specifications and research evidence.
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `0118019` | (see git log) |
+| `2635cbb` | (see git log) |
+| `bdeab0e` | (see git log) |
+
+### Status
+
+[OK] **Completed**
