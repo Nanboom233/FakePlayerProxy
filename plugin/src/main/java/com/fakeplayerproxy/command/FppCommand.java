@@ -1,29 +1,30 @@
 package com.fakeplayerproxy.command;
 
 import com.fakeplayerproxy.config.ProxyConfig;
-import com.fakeplayerproxy.automation.UpstreamConnectRequest;
-import com.fakeplayerproxy.automation.AutomationService;
-import com.fakeplayerproxy.automation.AutomationSnapshot;
-import com.fakeplayerproxy.automation.ProtocolTarget;
+import com.fakeplayerproxy.automation.AutomationManager;
+import com.fakeplayerproxy.protocol.ProtocolTarget;
 import com.fakeplayerproxy.util.ProxyError;
 import com.fakeplayerproxy.util.ProxyResult;
 import com.velocitypowered.api.command.SimpleCommand;
+import com.velocitypowered.api.proxy.Player;
 import java.util.Arrays;
 import java.util.List;
 import java.util.Locale;
 import java.util.Objects;
+import java.util.Optional;
+import net.kyori.adventure.text.Component;
 
 public final class FppCommand implements SimpleCommand {
     private final ProxyConfig defaultConfig;
-    private final AutomationService automationService;
-    private final PlayerCommandHandler playerCommandHandler;
+    private final AutomationManager automationManager;
+    private final PlayerCommand playerCommandHandler;
 
     public FppCommand(
             ProxyConfig defaultConfig,
-            AutomationService automationService,
-            PlayerCommandHandler playerCommandHandler) {
+            AutomationManager automationManager,
+            PlayerCommand playerCommandHandler) {
         this.defaultConfig = Objects.requireNonNull(defaultConfig, "defaultConfig");
-        this.automationService = Objects.requireNonNull(automationService, "automationService");
+        this.automationManager = Objects.requireNonNull(automationManager, "automationManager");
         this.playerCommandHandler = Objects.requireNonNull(playerCommandHandler, "playerCommandHandler");
     }
 
@@ -38,9 +39,13 @@ public final class FppCommand implements SimpleCommand {
         String root = args[0].toLowerCase(Locale.ROOT);
         switch (root) {
             case "status" -> sendStatus(invocation);
-            case "connect" -> connect(invocation, Arrays.copyOfRange(args, 1, args.length));
-            case "disconnect" -> disconnect(invocation);
-            case "look-north" -> lookNorth(invocation);
+            case "connect" -> sendError(invocation, new ProxyError(
+                    "command_unsupported", "This connection already owns its authenticated backend."));
+            case "disconnect" -> withPlayer(invocation).ifPresent(player ->
+                    render(invocation, automationManager.closeBackend(player), "Closed backend connection."));
+            case "look-north" -> withAutomationPlayer(invocation).ifPresent(player ->
+                    render(invocation, player.automationService().look(180.0f, 0.0f),
+                            "Sent look-north packet."));
             case "player" -> playerCommandHandler.execute(invocation.source(), Arrays.copyOfRange(args, 1, args.length));
             default -> sendError(invocation, new ProxyError("command_unknown", "Unknown /fpp command."));
         }
@@ -70,48 +75,15 @@ public final class FppCommand implements SimpleCommand {
         return List.of();
     }
 
-    private void connect(Invocation invocation, String[] connectArgs) {
-        ProxyResult<UpstreamConnectRequest> parsed = ConnectCommandParser.parseConnectArgs(connectArgs, defaultConfig);
-        if (!parsed.isSuccess()) {
-            sendError(invocation, parsed.errorOrThrow());
+    private void sendStatus(Invocation invocation) {
+        Optional<Player> player = withPlayer(invocation);
+        if (player.isEmpty()) {
             return;
         }
-
-        UpstreamConnectRequest request = parsed.valueOrThrow();
-        ProxyResult<AutomationSnapshot> result = automationService.connect(request);
-        if (result.isSuccess()) {
-            invocation.source().sendPlainMessage("[FPP] Started upstream connection: " + request.targetLabel());
-            invocation.source().sendPlainMessage("[FPP] State: " + result.valueOrThrow().state());
-        } else {
-            sendError(invocation, result.errorOrThrow());
-        }
-    }
-
-    private void disconnect(Invocation invocation) {
-        ProxyResult<AutomationSnapshot> result = automationService.disconnect();
-        if (result.isSuccess()) {
-            invocation.source().sendPlainMessage("[FPP] " + result.valueOrThrow().message());
-            invocation.source().sendPlainMessage("[FPP] State: " + result.valueOrThrow().state());
-        } else {
-            sendError(invocation, result.errorOrThrow());
-        }
-    }
-
-    private void lookNorth(Invocation invocation) {
-        ProxyResult<Void> result = automationService.lookNorth();
-        if (result.isSuccess()) {
-            invocation.source().sendPlainMessage("[FPP] Sent look-north packet.");
-        } else {
-            sendError(invocation, result.errorOrThrow());
-        }
-    }
-
-    private void sendStatus(Invocation invocation) {
-        AutomationSnapshot snapshot = automationService.snapshot();
-        invocation.source().sendPlainMessage("[FPP] State: " + snapshot.state());
-        invocation.source().sendPlainMessage("[FPP] Target: " + snapshot.targetLabel());
-        invocation.source().sendPlainMessage("[FPP] Play ready: " + snapshot.playReady());
-        invocation.source().sendPlainMessage("[FPP] Message: " + snapshot.message());
+        var automationPlayer = automationManager.get(player.get());
+        var service = automationPlayer == null ? null : automationPlayer.automationService();
+        invocation.source().sendPlainMessage("[FPP] Automation: " + (service == null ? "unavailable" : "registered"));
+        invocation.source().sendPlainMessage("[FPP] Shadow: " + (service != null && service.isShadow()));
         invocation.source().sendPlainMessage("[FPP] Default config: " + defaultConfig.targetLabel());
         invocation.source().sendPlainMessage("[FPP] Auto reconnect: " + defaultConfig.reconnect().enabled()
                 + " (" + defaultConfig.reconnect().authMode()
@@ -125,11 +97,42 @@ public final class FppCommand implements SimpleCommand {
         invocation.source().sendPlainMessage("[FPP] Usage: /fpp connect [host] [port] [username]");
         invocation.source().sendPlainMessage("[FPP] Usage: /fpp disconnect");
         invocation.source().sendPlainMessage("[FPP] Usage: /fpp look-north");
-        invocation.source().sendPlainMessage("[FPP] Usage: /fpp player self <shadow|stop|kill|look|turn|move|jump|hotbar|sneak|sprint>");
+        invocation.source().sendPlainMessage("[FPP] Usage: /fpp player <shadow|stop|kill|look|turn|move|jump|hotbar|sneak|sprint>");
     }
 
     private void sendError(Invocation invocation, ProxyError error) {
         invocation.source().sendPlainMessage("[FPP] Error: " + error.safeMessage());
+    }
+
+    private Optional<Player> withPlayer(Invocation invocation) {
+        if (invocation.source() instanceof Player player) {
+            return Optional.of(player);
+        }
+        invocation.source().sendMessage(Component.translatable("fakeplayerproxy.command.player_required"));
+        return Optional.empty();
+    }
+
+    private Optional<com.fakeplayerproxy.world.player.Player> withAutomationPlayer(Invocation invocation) {
+        Optional<Player> player = withPlayer(invocation);
+        if (player.isEmpty()) {
+            return Optional.empty();
+        }
+        var automationPlayer = automationManager.get(player.get());
+        if (automationPlayer == null) {
+            sendError(invocation, new ProxyError(
+                    "automation_registration_missing",
+                    "No automation is registered for this player."));
+            return Optional.empty();
+        }
+        return Optional.of(automationPlayer);
+    }
+
+    private void render(Invocation invocation, ProxyResult<Void> result, String successMessage) {
+        if (result.isSuccess()) {
+            invocation.source().sendPlainMessage("[FPP] " + successMessage);
+        } else {
+            sendError(invocation, result.errorOrThrow());
+        }
     }
 
     private List<String> filterPrefix(List<String> options, String prefix) {

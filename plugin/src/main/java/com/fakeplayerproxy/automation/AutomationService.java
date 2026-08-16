@@ -1,552 +1,485 @@
 package com.fakeplayerproxy.automation;
 
-import com.fakeplayerproxy.config.ReconnectConfig;
-import com.fakeplayerproxy.protocol.McProtocolLibUpstreamClient;
-import com.fakeplayerproxy.protocol.UpstreamClient;
-import com.fakeplayerproxy.util.ProxyError;
-import com.fakeplayerproxy.util.ProxyResult;
+import com.fakeplayerproxy.world.entity.Entity;
+import com.fakeplayerproxy.world.player.Player;
+import com.velocitypowered.proxy.connection.MinecraftConnection;
+import io.netty.util.concurrent.ScheduledFuture;
+import lombok.Getter;
+import net.kyori.adventure.text.Component;
+
 import java.util.EnumMap;
+import java.util.HashMap;
+import java.util.HashSet;
+import java.util.List;
 import java.util.Map;
 import java.util.Objects;
-import java.util.concurrent.Executors;
-import java.util.concurrent.ScheduledExecutorService;
-import java.util.concurrent.ScheduledFuture;
-import java.util.concurrent.TimeUnit;
+import java.util.Set;
 
+import org.geysermc.mcprotocollib.network.packet.Packet;
+import org.geysermc.mcprotocollib.protocol.data.game.KnownPack;
+import org.geysermc.mcprotocollib.protocol.packet.common.serverbound.ServerboundKeepAlivePacket;
+import org.geysermc.mcprotocollib.protocol.packet.common.serverbound.ServerboundPongPacket;
+import org.geysermc.mcprotocollib.protocol.packet.configuration.serverbound.ServerboundFinishConfigurationPacket;
+import org.geysermc.mcprotocollib.protocol.packet.configuration.serverbound.ServerboundSelectKnownPacks;
+import org.geysermc.mcprotocollib.protocol.packet.cookie.serverbound.ServerboundCookieResponsePacket;
+import org.geysermc.mcprotocollib.protocol.packet.ingame.serverbound.ServerboundChatAckPacket;
+import org.geysermc.mcprotocollib.protocol.packet.ingame.serverbound.ServerboundConfigurationAcknowledgedPacket;
+import org.geysermc.mcprotocollib.protocol.packet.ingame.serverbound.ServerboundPlayerLoadedPacket;
+import org.geysermc.mcprotocollib.protocol.packet.ingame.serverbound.ServerboundClientTickEndPacket;
+import org.geysermc.mcprotocollib.protocol.packet.ingame.serverbound.level.ServerboundAcceptTeleportationPacket;
+import org.geysermc.mcprotocollib.protocol.packet.ingame.serverbound.level.ServerboundChunkBatchReceivedPacket;
+import org.geysermc.mcprotocollib.protocol.packet.ingame.serverbound.player.ServerboundMovePlayerPosRotPacket;
+import org.geysermc.mcprotocollib.protocol.packet.ingame.serverbound.player.ServerboundMovePlayerRotPacket;
+import com.fakeplayerproxy.util.ProxyError;
+import com.fakeplayerproxy.util.ProxyResult;
+import java.util.function.Function;
+
+/** Mutable state for one authenticated relay connection. Access is restricted to its EventLoop. */
 public final class AutomationService {
-    private static final long MINECRAFT_TICK_MILLIS = 50L;
+    private static final int CHAT_ACK_BATCH_SIZE = 65;
+    private static final Set<KnownPack> SUPPORTED_KNOWN_PACKS = Set.of(
+            new KnownPack("minecraft", "core", "26.2"));
 
-    private final FailureReporter failureReporter;
-    private final ScheduledExecutorService reconnectExecutor;
-    private final Map<ScheduledAction, ScheduledFuture<?>> scheduledActions = new EnumMap<>(ScheduledAction.class);
+    private final Map<ScheduledAction, ScheduledActionState> scheduledActions =
+            new EnumMap<>(ScheduledAction.class);
 
-    private AutomationSnapshot snapshot = AutomationSnapshot.idle("No upstream connection.");
-    private ReconnectConfig reconnectConfig = ReconnectConfig.DEFAULT;
-    private UpstreamClient currentClient;
-    private UpstreamConnectRequest currentRequest;
-    private InputState inputState = InputState.CLEAR;
-    private int reconnectAttempts;
-    private boolean intentionalDisconnect;
-    private boolean shuttingDown;
+    private final Player owner;
+    private ScheduledFuture<?> tickTask;
+    private final Map<net.kyori.adventure.key.Key, byte[]> cookies = new HashMap<>();
+    private final Set<Signature> pendingChatSignatures = new HashSet<>();
+    private boolean inGame;
+    private double clientTickAccumulatorMillis;
+    private boolean initialPosition;
+    private boolean playerLoaded;
+    private boolean pendingConfigurationSwitch;
+    private boolean waitingConfigurationFinish;
+    private List<KnownPack> offeredKnownPacks = List.of();
+    private List<KnownPack> selectedKnownPacks = List.of();
+    @Getter
+    private boolean shadow;
+    private boolean closed;
 
-    public AutomationService(FailureReporter failureReporter) {
-        this(failureReporter, Executors.newSingleThreadScheduledExecutor(runnable -> {
-            Thread thread = new Thread(runnable, "fakeplayerproxy-reconnect");
-            thread.setDaemon(true);
-            return thread;
-        }));
+    public AutomationService(Player owner) {
+        this.owner = Objects.requireNonNull(owner, "owner");
     }
 
-    AutomationService(
-            FailureReporter failureReporter,
-            ScheduledExecutorService reconnectExecutor) {
-        this.failureReporter = Objects.requireNonNull(failureReporter, "failureReporter");
-        this.reconnectExecutor = Objects.requireNonNull(reconnectExecutor, "reconnectExecutor");
-    }
-
-    public synchronized void setReconnectConfig(ReconnectConfig reconnectConfig) {
-        this.reconnectConfig = Objects.requireNonNull(reconnectConfig, "reconnectConfig");
-    }
-
-    public synchronized ProxyResult<AutomationSnapshot> connect(UpstreamConnectRequest request) {
-        Objects.requireNonNull(request, "request");
-        if (!canStartConnection()) {
-            return ProxyResult.failure(new ProxyError(
-                    "automation_connection_active",
-                    "A upstream connection is already active: " + snapshot.targetLabel()));
+    public void setTickTask(ScheduledFuture<?> tickTask) {
+        if (this.tickTask != null) {
+            throw new IllegalStateException("Automation tick is already scheduled");
         }
-
-        reconnectAttempts = 0;
-        intentionalDisconnect = false;
-        inputState = InputState.CLEAR;
-        cancelAllScheduledActions();
-        return startClient(request, AutomationState.CONNECTING, "Starting offline-mode upstream login.");
+        this.tickTask = Objects.requireNonNull(tickTask, "tickTask");
     }
 
-    private ProxyResult<AutomationSnapshot> startClient(
-            UpstreamConnectRequest request,
-            AutomationState state,
-            String message) {
-        UpstreamClient client = new McProtocolLibUpstreamClient(request.host(), request.port(), request.username());
-        currentClient = client;
-        currentRequest = request;
-        snapshot = AutomationSnapshot.forRequest(state, request, false, message);
-
-        try {
-            client.connect(new ServiceClientListener(client, request));
-            return ProxyResult.success(snapshot);
-        } catch (Exception e) {
-            currentClient = null;
-            currentRequest = null;
-            closeQuietly(client);
-            failureReporter.report("Could not start upstream client.", e);
-            if (state == AutomationState.RECONNECTING && canScheduleReconnect()) {
-                scheduleReconnect(request, "start failed", e);
-                return ProxyResult.success(snapshot);
-            }
-            snapshot = AutomationSnapshot.forRequest(
-                    AutomationState.FAILED,
-                    request,
-                    false,
-                    "Could not start upstream client.");
-            return ProxyResult.failure(new ProxyError(
-                    "automation_connect_start_failed",
-                    "Could not start upstream client; check proxy logs for details."));
-        }
-    }
-
-    public synchronized ProxyResult<AutomationSnapshot> disconnect() {
-        if (currentClient == null) {
-            if (snapshot.state() == AutomationState.FAILED) {
-                snapshot = AutomationSnapshot.idle("Cleared failed upstream connection.");
-                currentRequest = null;
-                return ProxyResult.success(snapshot);
-            }
-            return ProxyResult.failure(new ProxyError(
-                    "automation_connection_missing",
-                    "No upstream connection is active."));
-        }
-
-        UpstreamClient client = currentClient;
-        UpstreamConnectRequest request = currentRequest;
-        intentionalDisconnect = true;
-        cancelAllScheduledActions();
-        snapshot = AutomationSnapshot.forRequest(
-                AutomationState.DISCONNECTING,
-                request,
-                false,
-                "Disconnect requested by operator.");
-        try {
-            client.disconnect("Operator requested disconnect");
-            return ProxyResult.success(snapshot);
-        } catch (RuntimeException e) {
-            currentClient = null;
-            currentRequest = null;
-            closeQuietly(client);
-            snapshot = AutomationSnapshot.forRequest(
-                    AutomationState.FAILED,
-                    request,
-                    false,
-                    "Could not disconnect upstream client cleanly.");
-            failureReporter.report("Could not disconnect upstream client.", e);
-            return ProxyResult.failure(new ProxyError(
-                    "automation_disconnect_failed",
-                    "Could not disconnect upstream client cleanly; check proxy logs for details."));
-        }
-    }
-
-    public synchronized ProxyResult<Void> lookNorth() {
-        return look(180.0f, 0.0f);
-    }
-
-    public synchronized ProxyResult<Void> look(float yaw, float pitch) {
-        if (currentClient == null || snapshot.state() != AutomationState.CONNECTED || !snapshot.playReady()) {
-            return ProxyResult.failure(new ProxyError(
-                    "automation_not_play_ready",
-                    "Upstream client is not in play state yet."));
-        }
-
-        try {
-            return currentClient.look(yaw, pitch);
-        } catch (RuntimeException e) {
-            failureReporter.report("Could not send look action.", e);
-            return ProxyResult.failure(new ProxyError(
-                    "automation_action_failed",
-                    "Could not send look action; check proxy logs for details."));
-        }
-    }
-
-    public synchronized ProxyResult<Void> turn(float yawDelta, float pitchDelta) {
-        if (currentClient == null || snapshot.state() != AutomationState.CONNECTED || !snapshot.playReady()) {
-            return ProxyResult.failure(new ProxyError(
-                    "automation_not_play_ready",
-                    "Upstream client is not in play state yet."));
-        }
-        return currentClient.turn(yawDelta, pitchDelta);
-    }
-
-    public synchronized ProxyResult<Void> selectHotbar(int slotOneBased) {
-        if (currentClient == null || snapshot.state() != AutomationState.CONNECTED || !snapshot.playReady()) {
-            return ProxyResult.failure(new ProxyError(
-                    "automation_not_play_ready",
-                    "Upstream client is not in play state yet."));
-        }
-        return currentClient.selectHotbar(slotOneBased);
-    }
-
-    public synchronized ProxyResult<Void> move(String direction) {
-        inputState = inputState.withMovement(direction);
-        return sendInputState();
-    }
-
-    public synchronized ProxyResult<Void> stopActions() {
-        cancelAllScheduledActions();
-        inputState = InputState.CLEAR;
-        if (currentClient == null || snapshot.state() != AutomationState.CONNECTED || !snapshot.playReady()) {
-            return ProxyResult.success();
-        }
-        return sendInputState();
-    }
-
-    public synchronized ProxyResult<Void> jumpOnce() {
-        cancelScheduledAction(ScheduledAction.JUMP);
-        return jumpOnceInternal();
-    }
-
-    public synchronized ProxyResult<Void> jumpInterval(int intervalTicks) {
-        return runActionMode(ScheduledAction.JUMP, ActionMode.INTERVAL, intervalTicks);
-    }
-
-    private ProxyResult<Void> jumpOnceInternal() {
-        InputState beforeJump = inputState;
-        inputState = inputState.withJump(true);
-        ProxyResult<Void> jump = sendInputState();
-        inputState = beforeJump.withJump(false);
-        ProxyResult<Void> release = sendInputState();
-        return jump.isSuccess() ? release : jump;
-    }
-
-    public synchronized ProxyResult<Void> setJump(boolean enabled) {
-        cancelScheduledAction(ScheduledAction.JUMP);
-        inputState = inputState.withJump(enabled);
-        return sendInputState();
-    }
-
-    public synchronized ProxyResult<Void> setSneak(boolean enabled) {
-        inputState = inputState.withShift(enabled);
-        return sendInputState();
-    }
-
-    public synchronized ProxyResult<Void> attack(ActionMode mode, int intervalTicks) {
-        return runActionMode(ScheduledAction.ATTACK, mode, intervalTicks);
-    }
-
-    public synchronized ProxyResult<Void> use(ActionMode mode, int intervalTicks) {
-        return runActionMode(ScheduledAction.USE, mode, intervalTicks);
-    }
-
-    public synchronized ProxyResult<Void> dropSelectedItem(boolean stack, ActionMode mode, int intervalTicks) {
-        return runActionMode(stack ? ScheduledAction.DROP_STACK : ScheduledAction.DROP, mode, intervalTicks);
-    }
-
-    public synchronized ProxyResult<Void> swapHands(ActionMode mode, int intervalTicks) {
-        return runActionMode(ScheduledAction.SWAP_HANDS, mode, intervalTicks);
-    }
-
-    public synchronized ProxyResult<Void> dismount() {
-        InputState beforeDismount = inputState;
-        inputState = inputState.withShift(true);
-        ProxyResult<Void> press = sendInputState();
-        inputState = beforeDismount;
-        ProxyResult<Void> release = sendInputState();
-        return press.isSuccess() ? release : press;
-    }
-
-    private ProxyResult<Void> runActionMode(ScheduledAction action, ActionMode mode, int intervalTicks) {
-        Objects.requireNonNull(action, "action");
-        Objects.requireNonNull(mode, "mode");
-        cancelScheduledAction(action);
-
-        ProxyResult<Void> firstRun = runScheduledActionOnce(action);
-        if (!firstRun.isSuccess() || mode == ActionMode.ONCE) {
-            return firstRun;
-        }
-
-        int normalizedIntervalTicks = mode == ActionMode.CONTINUOUS ? 1 : intervalTicks;
-        if (normalizedIntervalTicks < 1) {
-            return ProxyResult.failure(new ProxyError(
-                    "automation_invalid_interval",
-                    "Interval ticks must be 1 or greater."));
-        }
-
-        long periodMillis = normalizedIntervalTicks * MINECRAFT_TICK_MILLIS;
-        ScheduledFuture<?> future = reconnectExecutor.scheduleAtFixedRate(
-                () -> runScheduledActionTick(action),
-                periodMillis,
-                periodMillis,
-                TimeUnit.MILLISECONDS);
-        scheduledActions.put(action, future);
-        return ProxyResult.success();
-    }
-
-    private void runScheduledActionTick(ScheduledAction action) {
-        synchronized (this) {
-            if (shuttingDown || intentionalDisconnect || snapshot.state() == AutomationState.DISCONNECTING) {
-                cancelScheduledAction(action);
-                return;
-            }
-            if (currentClient == null || snapshot.state() != AutomationState.CONNECTED || !snapshot.playReady()) {
-                return;
-            }
-
-            ProxyResult<Void> result = runScheduledActionOnce(action);
-            if (!result.isSuccess()) {
-                cancelScheduledAction(action);
-                failureReporter.report(
-                        "Scheduled automation action failed: " + result.errorOrThrow().safeMessage(),
-                        null);
-            }
-        }
-    }
-
-    private ProxyResult<Void> runScheduledActionOnce(ScheduledAction action) {
-        if (currentClient == null || snapshot.state() != AutomationState.CONNECTED || !snapshot.playReady()) {
-            return ProxyResult.failure(new ProxyError(
-                    "automation_not_play_ready",
-                    "Upstream client is not in play state yet."));
-        }
-
-        try {
-            return switch (action) {
-                case ATTACK -> currentClient.swingMainHand();
-                case USE -> currentClient.useMainHand();
-                case DROP -> currentClient.dropSelectedItem(false);
-                case DROP_STACK -> currentClient.dropSelectedItem(true);
-                case SWAP_HANDS -> currentClient.swapHands();
-                case JUMP -> jumpOnceInternal();
-            };
-        } catch (RuntimeException e) {
-            failureReporter.report("Could not send " + action.safeName() + " action.", e);
-            return ProxyResult.failure(new ProxyError(
-                    "automation_action_failed",
-                    "Could not send " + action.safeName() + " action; check proxy logs for details."));
-        }
-    }
-
-    public synchronized ProxyResult<Void> setSprint(boolean enabled) {
-        inputState = inputState.withSprint(enabled);
-        return sendInputState();
-    }
-
-    private ProxyResult<Void> sendInputState() {
-        if (currentClient == null || snapshot.state() != AutomationState.CONNECTED || !snapshot.playReady()) {
-            return ProxyResult.failure(new ProxyError(
-                    "automation_not_play_ready",
-                    "Upstream client is not in play state yet."));
-        }
-        try {
-            return currentClient.sendInput(inputState);
-        } catch (RuntimeException e) {
-            failureReporter.report("Could not send input action.", e);
-            return ProxyResult.failure(new ProxyError(
-                    "automation_action_failed",
-                    "Could not send input action; check proxy logs for details."));
-        }
-    }
-
-    public synchronized AutomationSnapshot snapshot() {
-        return snapshot;
-    }
-
-    public synchronized void shutdown() {
-        cancelAllScheduledActions();
-        if (currentClient == null) {
-            reconnectExecutor.shutdownNow();
-            return;
-        }
-
-        UpstreamClient client = currentClient;
-        shuttingDown = true;
-        intentionalDisconnect = true;
-        currentClient = null;
-        currentRequest = null;
-        snapshot = AutomationSnapshot.idle("Proxy shutdown closed upstream connection.");
-        try {
-            client.disconnect("Proxy shutdown");
-        } catch (RuntimeException e) {
-            failureReporter.report("Could not disconnect upstream client during shutdown.", e);
-        } finally {
-            closeQuietly(client);
-            reconnectExecutor.shutdownNow();
-        }
-    }
-
-    private boolean canStartConnection() {
-        return currentClient == null
-                && (snapshot.state() == AutomationState.IDLE || snapshot.state() == AutomationState.FAILED);
-    }
-
-    private void onTransportConnected(UpstreamClient client, UpstreamConnectRequest request) {
-        synchronized (this) {
-            if (client != currentClient || snapshot.state() == AutomationState.DISCONNECTING) {
-                return;
-            }
-            snapshot = AutomationSnapshot.forRequest(
-                    AutomationState.CONNECTING,
-                    request,
-                    false,
-                    "Transport connected; waiting for play state.");
-        }
-    }
-
-    private void onPlayReady(UpstreamClient client, UpstreamConnectRequest request) {
-        synchronized (this) {
-            if (client != currentClient || snapshot.state() == AutomationState.DISCONNECTING) {
-                return;
-            }
-            snapshot = AutomationSnapshot.forRequest(
-                    AutomationState.CONNECTED,
-                    request,
-                    true,
-                    "Offline-mode upstream client reached play state.");
-        }
-    }
-
-    private void onDisconnected(UpstreamClient client, UpstreamConnectRequest request, String safeReason, Throwable cause) {
-        synchronized (this) {
-            if (client != currentClient) {
-                return;
-            }
-
-            currentClient = null;
-            currentRequest = null;
-            if (snapshot.state() == AutomationState.DISCONNECTING) {
-                cancelAllScheduledActions();
-                snapshot = AutomationSnapshot.idle("Upstream disconnected.");
-            } else if (!intentionalDisconnect && canScheduleReconnect()) {
-                scheduleReconnect(request, safeReason, cause);
-            } else {
-                cancelAllScheduledActions();
-                snapshot = AutomationSnapshot.forRequest(
-                        AutomationState.FAILED,
-                        request,
-                        false,
-                        "Upstream disconnected: " + safeReason);
-            }
-        }
-
-        if (cause != null) {
-            failureReporter.report("Upstream disconnected with an error.", cause);
-        }
-    }
-
-    private void onClientError(UpstreamClient client, UpstreamConnectRequest request, String safeMessage, Throwable cause) {
-        synchronized (this) {
-            if (client != currentClient) {
-                return;
-            }
-            currentClient = null;
-            currentRequest = null;
-            cancelAllScheduledActions();
-            snapshot = AutomationSnapshot.forRequest(
-                    AutomationState.FAILED,
-                    request,
-                    false,
-                    safeMessage);
-        }
-        failureReporter.report(safeMessage, cause);
-    }
-
-    private boolean canScheduleReconnect() {
-        return !shuttingDown
-                && reconnectConfig.enabled()
-                && ReconnectConfig.OFFLINE_CONTROLLED_AUTH_MODE.equals(reconnectConfig.authMode())
-                && reconnectAttempts < reconnectConfig.maxAttempts();
-    }
-
-    private void scheduleReconnect(UpstreamConnectRequest request, String reason, Throwable cause) {
-        reconnectAttempts++;
-        snapshot = AutomationSnapshot.forRequest(
-                AutomationState.RECONNECTING,
-                request,
-                false,
-                "Auto reconnect " + reconnectAttempts + "/" + reconnectConfig.maxAttempts()
-                        + " scheduled after disconnect: " + reason);
-        reconnectExecutor.schedule(
-                () -> runReconnectAttempt(request),
-                reconnectConfig.delayMillis(),
-                TimeUnit.MILLISECONDS);
-        if (cause != null) {
-            failureReporter.report("Upstream scheduled for auto reconnect.", cause);
-        }
-    }
-
-    private void runReconnectAttempt(UpstreamConnectRequest request) {
-        synchronized (this) {
-            if (shuttingDown || snapshot.state() != AutomationState.RECONNECTING || currentClient != null) {
-                return;
-            }
-            intentionalDisconnect = false;
-            startClient(
-                    request,
-                    AutomationState.RECONNECTING,
-                    "Auto reconnect attempt " + reconnectAttempts + "/" + reconnectConfig.maxAttempts() + ".");
-        }
-    }
-
-    private void closeQuietly(UpstreamClient client) {
-        try {
-            client.close();
-        } catch (RuntimeException e) {
-            failureReporter.report("Could not close upstream client.", e);
-        }
-    }
-
-    private void cancelScheduledAction(ScheduledAction action) {
-        ScheduledFuture<?> future = scheduledActions.remove(action);
-        if (future != null) {
-            future.cancel(false);
-        }
-    }
-
-    private void cancelAllScheduledActions() {
-        for (ScheduledFuture<?> future : scheduledActions.values()) {
-            future.cancel(false);
-        }
+    public void enterGame() {
+        inGame = true;
+        playerLoaded = false;
+        initialPosition = false;
+        waitingConfigurationFinish = false;
+        clientTickAccumulatorMillis = 0.0;
         scheduledActions.clear();
     }
 
-    @FunctionalInterface
-    public interface FailureReporter {
-        void report(String message, Throwable cause);
+    public void resumeGame() {
+        inGame = true;
+        playerLoaded = false;
+        initialPosition = false;
+        clientTickAccumulatorMillis = 0.0;
+    }
+
+    public void startConfiguration() {
+        pendingConfigurationSwitch = false;
+        waitingConfigurationFinish = false;
+        pendingChatSignatures.clear();
+        offeredKnownPacks = List.of();
+        selectedKnownPacks = List.of();
+        owner.resetForConfiguration();
+        clientTickAccumulatorMillis = 0.0;
+        inGame = false;
+    }
+
+    public void allowConfigurationSwitch() {
+        pendingConfigurationSwitch = true;
+    }
+
+    public void markConfigurationFinish() {
+        waitingConfigurationFinish = true;
+    }
+
+    public void finishConfiguration(MinecraftConnection backend) {
+        if (!shadow || !waitingConfigurationFinish) {
+            return;
+        }
+        waitingConfigurationFinish = false;
+        backend.sendPacket(ServerboundFinishConfigurationPacket.INSTANCE, false);
+        inGame = true;
+    }
+
+    public void keepAlive(MinecraftConnection backend, long pingId) {
+        respond(backend, new ServerboundKeepAlivePacket(pingId), false);
+    }
+
+    public void pong(MinecraftConnection backend, int id) {
+        respond(backend, new ServerboundPongPacket(id), true);
+    }
+
+    public void offerKnownPacks(MinecraftConnection backend, List<KnownPack> knownPacks) {
+        offeredKnownPacks = copyPacks(knownPacks);
+        if (shadow) {
+            selectedKnownPacks = selectOfferedPacks(offeredKnownPacks);
+            respond(backend, new ServerboundSelectKnownPacks(selectedKnownPacks), false);
+        }
+    }
+
+    public ServerboundSelectKnownPacks selectKnownPacks(List<KnownPack> clientSelection) {
+        List<KnownPack> copiedSelection = copyPacks(clientSelection);
+        selectedKnownPacks = copiedSelection.equals(offeredKnownPacks)
+                ? selectOfferedPacks(offeredKnownPacks)
+                : List.of();
+        return new ServerboundSelectKnownPacks(selectedKnownPacks);
+    }
+
+    public void chunkBatchFinished(MinecraftConnection backend, int batchSize) {
+        float desiredChunksPerTick = Math.max(1.0f, batchSize);
+        respond(backend, new ServerboundChunkBatchReceivedPacket(desiredChunksPerTick), true);
+    }
+
+    public void storeCookie(net.kyori.adventure.key.Key key, byte[] payload) {
+        cookies.put(key, payload.clone());
+    }
+
+    public void requestCookie(MinecraftConnection backend, net.kyori.adventure.key.Key key) {
+        byte[] payload = cookies.get(key);
+        respond(backend, new ServerboundCookieResponsePacket(
+                key, payload == null ? null : payload.clone()), true);
+    }
+
+    public void chat(MinecraftConnection backend, byte[] signature) {
+        if (!shadow || signature == null || !pendingChatSignatures.add(new Signature(signature))) {
+            return;
+        }
+        if (pendingChatSignatures.size() == CHAT_ACK_BATCH_SIZE) {
+            pendingChatSignatures.clear();
+            respond(backend, new ServerboundChatAckPacket(CHAT_ACK_BATCH_SIZE), false);
+        }
+    }
+
+    public void acknowledgePosition(MinecraftConnection backend, int teleportId) {
+        initialPosition = true;
+        if (shadow) {
+            respond(backend, new ServerboundAcceptTeleportationPacket(teleportId), true);
+            respond(backend, new ServerboundMovePlayerPosRotPacket(
+                    false, false,
+                    owner.position().getX(), owner.position().getY(), owner.position().getZ(),
+                    owner.yaw(), owner.pitch()), true);
+        }
+    }
+
+    public void playerLoaded() {
+        playerLoaded = true;
+    }
+
+    public void acknowledgeVehicle(MinecraftConnection backend) {
+        Entity root = owner;
+        while (root.vehicle() != null) {
+            root = root.vehicle();
+        }
+        if (root != owner) {
+            respond(backend, new org.geysermc.mcprotocollib.protocol.packet.ingame.serverbound.level.ServerboundMoveVehiclePacket(
+                    root.position(), root.yaw(), root.pitch(), root.onGround()), true);
+        }
+    }
+
+    public boolean selectedKnownPacksProvideFixedRegistry() {
+        return selectedKnownPacks.size() == SUPPORTED_KNOWN_PACKS.size()
+                && SUPPORTED_KNOWN_PACKS.containsAll(selectedKnownPacks);
+    }
+
+    private static List<KnownPack> selectOfferedPacks(List<KnownPack> offeredPacks) {
+        return SUPPORTED_KNOWN_PACKS.containsAll(offeredPacks)
+                ? copyPacks(offeredPacks) : List.of();
+    }
+
+    private static List<KnownPack> copyPacks(List<KnownPack> packs) {
+        return packs.stream()
+                .map(pack -> new KnownPack(pack.getNamespace(), pack.getId(), pack.getVersion()))
+                .toList();
+    }
+
+    public void acknowledgeRotation(MinecraftConnection backend) {
+        if (shadow) {
+            owner.recordSentRotation();
+            respond(backend, new ServerboundMovePlayerRotPacket(
+                    false, false, owner.yaw(), owner.pitch()), true);
+        }
+    }
+
+    public boolean shadow() {
+        // IDEA reports the borrowed EventLoop as unclosed. Velocity owns its lifecycle.
+        //noinspection resource
+        var eventLoop = owner.eventLoop();
+        if (!eventLoop.inEventLoop()) {
+            eventLoop.execute(() -> {
+                if (!shadow()) {
+                    owner.velocityPlayer().sendMessage(Component.translatable(
+                            "fakeplayerproxy.command.automation_unavailable"));
+                }
+            });
+            return true;
+        }
+        MinecraftConnection backend = owner.backendConnection();
+        if (shadow || closed || backend == null) {
+            return false;
+        }
+        var unavailableReason = owner.world().automationUnavailableReason();
+        if (unavailableReason.isPresent()) {
+            return false;
+        }
+        shadow = true;
+        owner.prepareShadow(backend);
+        owner.velocityPlayer().disconnect(Component.translatable(
+                "fakeplayerproxy.disconnect.shadow"));
+        return true;
+    }
+
+    public ProxyResult<Void> stopActions() {
+        return runAction(backend -> {
+            scheduledActions.clear();
+            return owner.stopActions(backend);
+        });
+    }
+
+    public ProxyResult<Void> look(float yaw, float pitch) {
+        return runAction(backend -> owner.look(backend, yaw, pitch));
+    }
+
+    public ProxyResult<Void> turn(float yawDelta, float pitchDelta) {
+        return runAction(backend -> owner.look(
+                backend,
+                owner.yaw() + yawDelta,
+                owner.pitch() + pitchDelta
+        ));
+    }
+
+    // The exact-shadow command does not expose this retained Automation action yet.
+    @SuppressWarnings("unused")
+    public ProxyResult<Void> selectHotbar(int slotOneBased) {
+        return runAction(backend -> owner.selectHotbar(backend, slotOneBased));
+    }
+
+    public ProxyResult<Void> move(String direction) {
+        return runAction(backend -> owner.moveInput(backend, direction));
+    }
+
+    // The exact-shadow command does not expose this retained Automation action yet.
+    @SuppressWarnings("unused")
+    public ProxyResult<Void> setJump(boolean enabled) {
+        return runAction(backend -> {
+            scheduledActions.remove(ScheduledAction.JUMP);
+            return owner.setJump(backend, enabled);
+        });
+    }
+
+    // The exact-shadow command does not expose this retained Automation action yet.
+    @SuppressWarnings("unused")
+    public ProxyResult<Void> jumpOnce() {
+        return runAction(backend -> {
+            scheduledActions.remove(ScheduledAction.JUMP);
+            return owner.pulseInput(backend, owner.inputState().withJump(true));
+        });
+    }
+
+    // The exact-shadow command does not expose this retained Automation action yet.
+    @SuppressWarnings("unused")
+    public ProxyResult<Void> jumpInterval(int intervalTicks) {
+        return runAction(backend -> schedule(backend, ScheduledAction.JUMP, ActionMode.INTERVAL, intervalTicks));
+    }
+
+    // The exact-shadow command does not expose this retained Automation action yet.
+    @SuppressWarnings("unused")
+    public ProxyResult<Void> setSneak(boolean enabled) {
+        return runAction(backend -> owner.setSneak(backend, enabled));
+    }
+
+    // The exact-shadow command does not expose this retained Automation action yet.
+    @SuppressWarnings("unused")
+    public ProxyResult<Void> setSprint(boolean enabled) {
+        return runAction(backend -> owner.setSprint(backend, enabled));
+    }
+
+    public ProxyResult<Void> attack(ActionMode mode, int intervalTicks) {
+        return runAction(backend -> schedule(backend, ScheduledAction.ATTACK, mode, intervalTicks));
+    }
+
+    public ProxyResult<Void> use(ActionMode mode, int intervalTicks) {
+        return runAction(backend -> schedule(backend, ScheduledAction.USE, mode, intervalTicks));
+    }
+
+    // The exact-shadow command does not expose this retained Automation action yet.
+    @SuppressWarnings("unused")
+    public ProxyResult<Void> dropSelectedItem(boolean stack, ActionMode mode, int intervalTicks) {
+        return runAction(backend -> schedule(
+                backend, stack ? ScheduledAction.DROP_STACK : ScheduledAction.DROP, mode, intervalTicks));
+    }
+
+    public ProxyResult<Void> swapHands(ActionMode mode, int intervalTicks) {
+        return runAction(backend -> schedule(backend, ScheduledAction.SWAP_HANDS, mode, intervalTicks));
+    }
+
+    public ProxyResult<Void> dismount() {
+        return runAction(backend -> owner.pulseInput(backend, owner.inputState().withShift(true)));
+    }
+
+    public void tick(MinecraftConnection backend) {
+        if (closed) {
+            return;
+        }
+        if (shadow && pendingConfigurationSwitch) {
+            pendingConfigurationSwitch = false;
+            backend.sendPacket(new ServerboundConfigurationAcknowledgedPacket(), false);
+            inGame = false;
+        }
+        scheduledActions.replaceAll((action, state) -> new ScheduledActionState(
+                state.periodTicks(), state.remainingTicks() - 1));
+        for (Map.Entry<ScheduledAction, ScheduledActionState> entry : scheduledActions.entrySet()) {
+            ScheduledActionState state = entry.getValue();
+            if (state.remainingTicks() > 0) {
+                continue;
+            }
+            sendScheduledAction(backend, entry.getKey());
+            entry.setValue(new ScheduledActionState(state.periodTicks(), state.periodTicks()));
+        }
+
+        if (shadow && inGame) {
+            if (!playerLoaded
+                    && initialPosition
+                    && owner.world().isLevelChunksLoadStarted()
+                    && owner.world().currentPlayerChunkLoaded(
+                    owner.position().getX(), owner.position().getZ())) {
+                backend.sendPacket(ServerboundPlayerLoadedPacket.INSTANCE);
+                playerLoaded = true;
+            }
+            clientTickAccumulatorMillis += 50.0;
+            double cadence = owner.world().clientTickCadenceMillis();
+            if (clientTickAccumulatorMillis + 1.0E-7 >= cadence) {
+                clientTickAccumulatorMillis -= cadence;
+                owner.tick(backend, playerLoaded && !owner.dead());
+                backend.sendPacket(ServerboundClientTickEndPacket.INSTANCE);
+            }
+        }
+    }
+
+    private void respond(MinecraftConnection backend, Packet packet, boolean bypass) {
+        if (!shadow || closed) {
+            return;
+        }
+        // Velocity owns the borrowed backend connection and event loop lifecycle.
+        //noinspection resource
+        var eventLoop = backend.eventLoop();
+        eventLoop.execute(() -> {
+            if (!closed && shadow && backend.getChannel().isActive()) {
+                backend.sendPacket(packet, bypass);
+            }
+        });
+    }
+
+    private ProxyResult<Void> schedule(
+            MinecraftConnection backend,
+            ScheduledAction action,
+            ActionMode mode,
+            int intervalTicks) {
+        Objects.requireNonNull(mode, "mode");
+        if (mode == ActionMode.INTERVAL && intervalTicks < 1) {
+            return unavailable("Interval ticks must be 1 or greater.");
+        }
+        ProxyResult<Void> first = sendScheduledAction(backend, action);
+        if (!first.isSuccess() || mode == ActionMode.ONCE) {
+            scheduledActions.remove(action);
+            return first;
+        }
+        int period = mode == ActionMode.CONTINUOUS ? 1 : intervalTicks;
+        scheduledActions.put(action, new ScheduledActionState(period, period));
+        return ProxyResult.success();
+    }
+
+    private ProxyResult<Void> sendScheduledAction(
+            MinecraftConnection backend, ScheduledAction action) {
+        return switch (action) {
+            case ATTACK -> owner.attack(backend);
+            case USE -> owner.use(backend);
+            case DROP -> owner.drop(backend, false);
+            case DROP_STACK -> owner.drop(backend, true);
+            case SWAP_HANDS -> owner.swapHands(backend);
+            case JUMP -> owner.pulseInput(backend, owner.inputState().withJump(true));
+        };
+    }
+
+    private ProxyResult<Void> runAction(
+            Function<MinecraftConnection, ProxyResult<Void>> action) {
+        // IDEA reports the borrowed EventLoop as unclosed. Velocity owns its lifecycle.
+        //noinspection resource
+        var eventLoop = owner.eventLoop();
+        if (!eventLoop.inEventLoop()) {
+            eventLoop.execute(() -> {
+                if (closed) {
+                    return;
+                }
+                MinecraftConnection backend = owner.backendConnection();
+                if (backend != null && inGame) {
+                    action.apply(backend);
+                }
+            });
+            return ProxyResult.success();
+        }
+        MinecraftConnection backend = owner.backendConnection();
+        if (closed || !inGame || backend == null) {
+            return unavailable("Automation is not in an active game connection.");
+        }
+        return action.apply(backend);
+    }
+
+    private static ProxyResult<Void> unavailable(String message) {
+        return ProxyResult.failure(new ProxyError("automation_unavailable", message));
+    }
+
+    public void close() {
+        if (closed) {
+            return;
+        }
+        closed = true;
+        shadow = false;
+        scheduledActions.clear();
+        if (tickTask != null) {
+            tickTask.cancel(false);
+            tickTask = null;
+        }
+    }
+
+    private record ScheduledActionState(int periodTicks, int remainingTicks) {
     }
 
     private enum ScheduledAction {
-        ATTACK("attack"),
-        USE("use"),
-        DROP("drop"),
-        DROP_STACK("dropStack"),
-        SWAP_HANDS("swapHands"),
-        JUMP("jump");
-
-        private final String safeName;
-
-        ScheduledAction(String safeName) {
-            this.safeName = safeName;
-        }
-
-        String safeName() {
-            return safeName;
-        }
+        ATTACK,
+        USE,
+        DROP,
+        DROP_STACK,
+        SWAP_HANDS,
+        JUMP
     }
 
-    private final class ServiceClientListener implements UpstreamClient.Listener {
-        private final UpstreamClient client;
-        private final UpstreamConnectRequest request;
-
-        private ServiceClientListener(UpstreamClient client, UpstreamConnectRequest request) {
-            this.client = client;
-            this.request = request;
+    private record Signature(byte[] value) {
+        Signature {
+            value = value.clone();
         }
 
         @Override
-        public void onTransportConnected() {
-            AutomationService.this.onTransportConnected(client, request);
+        public boolean equals(Object other) {
+            return other instanceof Signature(byte[] otherValue)
+                    && java.util.Arrays.equals(value, otherValue);
         }
 
         @Override
-        public void onPlayReady() {
-            AutomationService.this.onPlayReady(client, request);
-        }
-
-        @Override
-        public void onDisconnected(String safeReason, Throwable cause) {
-            AutomationService.this.onDisconnected(client, request, safeReason, cause);
-        }
-
-        @Override
-        public void onError(String safeMessage, Throwable cause) {
-            onClientError(client, request, safeMessage, cause);
+        public int hashCode() {
+            return java.util.Arrays.hashCode(value);
         }
     }
 }

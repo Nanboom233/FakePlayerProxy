@@ -1,10 +1,10 @@
 {
   "id": "fakeplayerproxy",
   "name": "FakePlayerProxy",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "FakePlayerProxy runtime for a Velocity-based fake player proxy.",
   "authors": [
-    "FakePlayerProxy"
+    "Nanboom233"
   ],
   "main": "com.fakeplayerproxy.FakePlayerProxyPlugin"
 }
