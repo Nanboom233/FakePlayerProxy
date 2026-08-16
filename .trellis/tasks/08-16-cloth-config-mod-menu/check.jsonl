@@ -1,0 +1,5 @@
+{"file": ".trellis/spec/frontend/index.md", "reason": "Check the frontend package routing and documentation rules."}
+{"file": ".trellis/spec/frontend/fabric-client-mod.md", "reason": "Check client-only dependency metadata, consent behavior, screen failure handling, and required validation."}
+{"file": ".trellis/spec/language/java.md", "reason": "Check Java annotations, value shapes, diagnostics, and source conventions."}
+{"file": ".trellis/spec/tooling/tool-selection.md", "reason": "Check Gradle repository/dependency choices and built artifact boundaries."}
+{"file": ".trellis/tasks/08-16-cloth-config-mod-menu/research/cloth-config-mod-menu.md", "reason": "Verify the upstream 26.2 API, compile dependency boundary, and save lifecycle."}

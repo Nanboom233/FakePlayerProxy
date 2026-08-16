@@ -6,7 +6,8 @@
 - Trigger: a Minecraft 26.2 client receives a modified Server Hello that declares
   FakePlayerProxy support.
 - The mod is client-only, uses Java 25 and Fabric Loader 0.19.3, and has no
-  Fabric API dependency or mod entrypoint.
+  Fabric API dependency or ordinary initialization entrypoint. Its only custom
+  entrypoint is `modmenu`.
 - Prefer newer Java language features and standard-library APIs when they make
   the code more concise, readable, or performant.
 - Connections to servers without the FakePlayerProxy Server Hello extension must
@@ -15,7 +16,12 @@
 ## 2. Structure
 
 - Shared logger owner: `com.fakeplayerproxy.mod.FakePlayerProxyMod`; it has no
-  connection state or Fabric entrypoint.
+  connection state or ordinary initialization entrypoint.
+- Client dependencies include required Cloth Config Fabric `26.2.155` through
+  `implementation` and optional non-transitive Mod Menu `20.0.1` through
+  `compileOnly`. This official-names Loom project does not create the
+  `modImplementation` or `modCompileOnly` configurations. Do not add Mod Menu
+  to a development runtime configuration or bundle it in the output jar.
 - Packet helpers belong under `com.fakeplayerproxy.mod.packets`.
 - Client screens belong under `com.fakeplayerproxy.mod.gui`.
 - Minecraft hooks belong under `com.fakeplayerproxy.mod.mixins` and every hook
@@ -298,16 +304,56 @@ The store uses `FabricLoader.getInstance().getConfigDir()` and the file
 `fakeplayerproxy/consent_store.toml`. It stores one boolean per server address.
 
 ```java
-Optional<Boolean> find(String serverAddress)
-void remember(String serverAddress, boolean allow)
+Map<String, Boolean> read()
+void write(String serverAddress, boolean allow)
+void delete(String serverAddress)
 ```
 
 The store uses the JDK file API for the small TOML shape required by this
 project. It does not use Gson, JSON, or a new TOML dependency.
 
+`read()` returns entries in file order and returns an empty map for an absent
+file. It omits each unescaped key for which `isBlank()` is true. On the second
+occurrence of an exact key, it removes that key from the result and ignores all
+later occurrences. These handled conditions do not rewrite the source file.
+
+`write()` adds or replaces one address. `delete()` removes one address. Both
+operations preserve the remaining filtered entries, quoted keys, UTF-8 output,
+and temporary-file replacement behavior.
+
 The store does not define a decision enum. A missing key opens the consent
-screen. A stored `true` allows the relay. A stored `false` declines it.
+screen. A stored `true` allows the relay. A stored `false` declines it. A read
+failure also opens the consent prompt and logs the complete exception.
 
 The Mod config boundary must not use `Objects.requireNonNull`, Java `assert`, or
-deliberate validation exceptions. Invalid input and read failures return the
-existing failure value and log the concrete condition.
+deliberate validation exceptions. Syntax and escape failures throw
+`IOException`; each caller logs the complete exception at its boundary.
+
+## Configuration Screen
+
+- `com.fakeplayerproxy.mod.gui.FakePlayerProxyConfigScreen` implements the
+  optional Mod Menu API and owns the Cloth Config screen plus its private row
+  types. The `modmenu` entrypoint points directly to this class.
+- Fabric Loader registers this custom entrypoint by definition and loads its
+  class only when the `modmenu` key is requested. No ordinary initializer or
+  Mixin refers to the screen class, so an installation without Mod Menu does
+  not resolve the optional API.
+- The screen reads the initial store before building one saved-decisions
+  category. A read failure logs the complete exception and returns a translated
+  `AlertScreen` that leads back to the parent.
+- Each list row uses `Pair<String, Boolean>` and contains one address field and
+  one Allow or Decline button. New rows start with an empty address and Decline.
+  Cloth Config supplies the add and delete controls.
+- Blank addresses and exact duplicate addresses are errors. Addresses are not
+  trimmed, normalized, or otherwise changed.
+- Cloth Config copies valid rows through the list save consumer before its
+  saving runnable compares them with the initial ordered map. Save deletes
+  removed addresses and writes new or changed decisions. It logs the first
+  store failure and stops. Cancel and discard do not modify the store.
+
+## Configuration Verification
+
+Run `:mod:build` and `git diff --check` for agent verification. The user owns
+runtime verification of Mod Menu presence and absence, screen behavior,
+validation, save and cancel behavior, read-failure display, and the next
+matching login decision.

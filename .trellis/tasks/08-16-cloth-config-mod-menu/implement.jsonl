@@ -1,0 +1,6 @@
+{"file": ".trellis/spec/frontend/index.md", "reason": "Follow the frontend package routing and documentation rules."}
+{"file": ".trellis/spec/frontend/fabric-client-mod.md", "reason": "Implement the Fabric client dependency, screen, consent-store, localization, and Mod Menu contracts."}
+{"file": ".trellis/spec/language/java.md", "reason": "Apply the project Java value-shape, annotation, method, and diagnostic conventions."}
+{"file": ".trellis/spec/tooling/tool-selection.md", "reason": "Follow project Gradle, native-tool, dependency, and artifact-validation rules."}
+{"file": ".trellis/spec/guides/code-reuse-thinking-guide.md", "reason": "Keep TOML parsing and writing in one ConsentStore owner and avoid duplicate validation contracts."}
+{"file": ".trellis/tasks/08-16-cloth-config-mod-menu/research/cloth-config-mod-menu.md", "reason": "Use the verified APIs, versions, save order, composite cell boundary, and optional entrypoint contract."}
