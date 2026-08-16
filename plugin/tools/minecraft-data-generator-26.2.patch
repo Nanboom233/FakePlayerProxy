@@ -1,0 +1,272 @@
+diff --git a/mc/26.2/src/main/java/dev/u9g/minecraftdatagenerator/generators/BlocksDataGenerator.java b/mc/26.2/src/main/java/dev/u9g/minecraftdatagenerator/generators/BlocksDataGenerator.java
+index 4bcef97..8f0772a 100644
+--- a/mc/26.2/src/main/java/dev/u9g/minecraftdatagenerator/generators/BlocksDataGenerator.java
++++ b/mc/26.2/src/main/java/dev/u9g/minecraftdatagenerator/generators/BlocksDataGenerator.java
+@@ -16,6 +16,8 @@ import net.minecraft.world.item.Items;
+ import net.minecraft.world.level.EmptyBlockGetter;
+ import net.minecraft.world.level.block.AirBlock;
+ import net.minecraft.world.level.block.Block;
++import net.minecraft.world.level.block.BubbleColumnBlock;
++import net.minecraft.world.level.block.ScaffoldingBlock;
+ import net.minecraft.world.level.block.state.BlockState;
+ import net.minecraft.world.level.block.state.properties.BooleanProperty;
+ import net.minecraft.world.level.block.state.properties.EnumProperty;
+@@ -23,6 +25,10 @@ import net.minecraft.world.level.block.state.properties.IntegerProperty;
+ import net.minecraft.world.level.block.state.properties.Property;
+ import net.minecraft.world.level.storage.loot.LootParams;
+ import net.minecraft.world.level.storage.loot.parameters.LootContextParams;
++import net.minecraft.tags.BlockTags;
++import net.minecraft.tags.FluidTags;
++import net.minecraft.world.level.material.FlowingFluid;
++import net.minecraft.world.level.material.FluidState;
+ import net.minecraft.world.phys.Vec3;
+ import net.minecraft.world.phys.shapes.VoxelShape;
+ import org.slf4j.Logger;
+@@ -30,6 +36,7 @@ import org.slf4j.LoggerFactory;
+ 
+ import java.util.ArrayList;
+ import java.util.Collection;
++import java.util.Comparator;
+ import java.util.List;
+ import java.util.stream.Collectors;
+ 
+@@ -152,6 +159,39 @@ public class BlocksDataGenerator implements IDataGenerator {
+         blockDesc.addProperty("minStateId", Block.getId(blockStates.getFirst()));
+         blockDesc.addProperty("maxStateId", Block.getId(blockStates.getLast()));
+ 
++        blockDesc.addProperty("friction", block.getFriction());
++        blockDesc.addProperty("speedFactor", block.getSpeedFactor());
++        blockDesc.addProperty("bounciness", block.getBounceRestitution());
++        JsonArray physicsStates = new JsonArray();
++        for (BlockState state : blockStates) {
++            FluidState fluid = state.getFluidState();
++            JsonObject physics = new JsonObject();
++            int fluidFaceMask = 0;
++            for (net.minecraft.core.Direction direction : net.minecraft.core.Direction.values()) {
++                if (!(block instanceof net.minecraft.world.level.block.IceBlock)
++                        && state.isFaceSturdy(DGU.getWorld(), net.minecraft.core.BlockPos.ZERO, direction)) {
++                    fluidFaceMask |= 1 << direction.get3DDataValue();
++                }
++            }
++            physics.addProperty("stateKey", stateKey(registryKey, state));
++            physics.addProperty("air", state.isAir());
++            physics.addProperty("water", fluid.is(FluidTags.WATER));
++            physics.addProperty("lava", fluid.is(FluidTags.LAVA));
++            physics.addProperty("climbable", state.is(BlockTags.CLIMBABLE));
++            physics.addProperty("bubbleDragDown", state.hasProperty(BubbleColumnBlock.DRAG_DOWN)
++                    && state.getValue(BubbleColumnBlock.DRAG_DOWN));
++            physics.addProperty("scaffoldingDistance", state.hasProperty(ScaffoldingBlock.DISTANCE)
++                    ? state.getValue(ScaffoldingBlock.DISTANCE) : 0);
++            physics.addProperty("scaffoldingBottom", state.hasProperty(ScaffoldingBlock.BOTTOM)
++                    && state.getValue(ScaffoldingBlock.BOTTOM));
++            physics.addProperty("fluidAmount", fluid.isEmpty() ? 0 : fluid.getAmount());
++            physics.addProperty("fluidFalling", fluid.hasProperty(FlowingFluid.FALLING)
++                    && fluid.getValue(FlowingFluid.FALLING));
++            physics.addProperty("fluidFaceMask", fluidFaceMask);
++            physicsStates.add(physics);
++        }
++        blockDesc.add("physicsStates", physicsStates);
++
+         JsonArray stateProperties = new JsonArray();
+         for (Property<?> property : block.getStateDefinition().getProperties()) {
+             stateProperties.add(generateStateProperty(property));
+@@ -184,6 +224,19 @@ public class BlocksDataGenerator implements IDataGenerator {
+         return blockDesc;
+     }
+ 
++    private static String stateKey(Identifier block, BlockState state) {
++        StringBuilder result = new StringBuilder(block.toString());
++        List<Property.Value<?>> values = state.getValues()
++                .sorted(Comparator.comparing(value -> value.property().getName())).toList();
++        if (!values.isEmpty()) {
++            result.append('[');
++            values.forEach(value -> result.append(value.property().getName()).append('=')
++                    .append(value.valueName()).append(','));
++            result.setCharAt(result.length() - 1, ']');
++        }
++        return result.toString();
++    }
++
+     @Override
+     public String getDataName() {
+         return "blocks";
+diff --git a/mc/26.2/src/main/java/dev/u9g/minecraftdatagenerator/generators/EntitiesDataGenerator.java b/mc/26.2/src/main/java/dev/u9g/minecraftdatagenerator/generators/EntitiesDataGenerator.java
+index fe12ad4..49b3034 100644
+--- a/mc/26.2/src/main/java/dev/u9g/minecraftdatagenerator/generators/EntitiesDataGenerator.java
++++ b/mc/26.2/src/main/java/dev/u9g/minecraftdatagenerator/generators/EntitiesDataGenerator.java
+@@ -3,23 +3,35 @@ package dev.u9g.minecraftdatagenerator.generators;
+ import com.google.gson.JsonArray;
+ import com.google.gson.JsonObject;
+ import dev.u9g.minecraftdatagenerator.util.DGU;
++import java.lang.reflect.Field;
++import java.util.Map;
+ import net.minecraft.core.Registry;
+ import net.minecraft.core.registries.Registries;
+ import net.minecraft.resources.Identifier;
+ import net.minecraft.server.MinecraftServer;
+ import net.minecraft.world.entity.AgeableMob;
++import net.minecraft.world.entity.Avatar;
+ import net.minecraft.world.entity.Entity;
++import net.minecraft.world.entity.EntityAttachment;
++import net.minecraft.world.entity.EntityDimensions;
+ import net.minecraft.world.entity.EntitySpawnReason;
+ import net.minecraft.world.entity.EntityType;
+ import net.minecraft.world.entity.LivingEntity;
+ import net.minecraft.world.entity.Mob;
++import net.minecraft.world.entity.Pose;
++import net.minecraft.world.phys.Vec3;
+ import net.minecraft.world.entity.ambient.AmbientCreature;
+ import net.minecraft.world.entity.animal.Animal;
+ import net.minecraft.world.entity.animal.fish.WaterAnimal;
+ import net.minecraft.world.entity.monster.Monster;
+ import net.minecraft.world.entity.projectile.Projectile;
++import net.minecraft.world.entity.ai.attributes.Attributes;
++import net.minecraft.world.entity.ai.attributes.AttributeSupplier;
++import net.minecraft.world.entity.ai.attributes.DefaultAttributes;
+ 
+ public class EntitiesDataGenerator implements IDataGenerator {
++    private static final Map<Pose, EntityDimensions> PLAYER_POSES = playerPoses();
++
+     public static JsonObject generateEntity(Registry<EntityType<?>> entityRegistry, EntityType<?> entityType) {
+         JsonObject entityDesc = new JsonObject();
+         Identifier registryKey = entityRegistry.getKey(entityType);
+@@ -36,22 +48,136 @@ public class EntitiesDataGenerator implements IDataGenerator {
+         String entityTypeString = "UNKNOWN";
+         MinecraftServer minecraftServer = DGU.getCurrentlyRunningServer();
+ 
++        Entity entityObject = null;
+         if (minecraftServer != null) {
+-            Entity entityObject = entityType.create(minecraftServer.overworld(), EntitySpawnReason.NATURAL);
++            entityObject = entityType.create(minecraftServer.overworld(), EntitySpawnReason.NATURAL);
+             entityTypeString = entityObject != null ? getEntityTypeForClass(entityObject.getClass()) : "unknown";
+         }
+-        if (entityType == EntityType.PLAYER) {
++        if (registryKey.getPath().equals("player")) {
+             entityTypeString = "player";
+         }
+ 
+         entityDesc.addProperty("type", entityTypeString);
+         entityDesc.addProperty("category", getCategoryFrom(entityType));
++        AttributeSupplier attributes = DefaultAttributes.hasSupplier(entityType)
++                ? DefaultAttributes.getSupplier((EntityType<? extends LivingEntity>) entityType) : null;
++        entityDesc.addProperty("living", attributes != null);
++        entityDesc.addProperty("pushable", entityObject != null ? entityObject.isPushable() : registryKey.getPath().equals("player"));
++        entityDesc.addProperty("movementCollision", entityObject != null && entityObject.canBeCollidedWith(null));
++        entityDesc.addProperty("pistonReaction", entityObject != null
++                && entityObject.getPistonPushReaction() == net.minecraft.world.level.material.PushReaction.IGNORE ? 1 : 0);
++        JsonObject metadataDefaults = new JsonObject();
++        metadataDefaults.addProperty("sharedFlags", 0);
++        metadataDefaults.addProperty("noGravity", entityObject != null && entityObject.isNoGravity());
++        metadataDefaults.addProperty("pose", entityObject != null ? entityObject.getPose().id() : Pose.STANDING.id());
++        metadataDefaults.addProperty("health", entityObject instanceof LivingEntity livingEntity
++                ? livingEntity.getHealth() : attributes != null ? attributes.getValue(Attributes.MAX_HEALTH) : 0.0F);
++        entityDesc.add("metadataDefaults", metadataDefaults);
++        JsonObject metadataSchema = new JsonObject();
++        metadataSchema.addProperty("sharedFlags", metadataId(
++                "net.minecraft.world.entity.Entity", "DATA_SHARED_FLAGS_ID"));
++        metadataSchema.addProperty("noGravity", metadataId(
++                "net.minecraft.world.entity.Entity", "DATA_NO_GRAVITY"));
++        metadataSchema.addProperty("pose", metadataId(
++                "net.minecraft.world.entity.Entity", "DATA_POSE"));
++        metadataSchema.addProperty("health", attributes != null ? metadataId(
++                "net.minecraft.world.entity.LivingEntity", "DATA_HEALTH_ID") : -1);
++        metadataSchema.addProperty("horseFlags", switch (registryKey.getPath()) {
++            case "horse", "donkey", "mule", "skeleton_horse", "zombie_horse", "llama", "trader_llama",
++                    "camel", "camel_husk" -> metadataId(
++                            "net.minecraft.world.entity.animal.equine.AbstractHorse", "DATA_ID_FLAGS");
++            default -> -1;
++        });
++        metadataSchema.addProperty("steeringBoost", switch (registryKey.getPath()) {
++            case "pig" -> metadataId("net.minecraft.world.entity.animal.pig.Pig", "DATA_BOOST_TIME");
++            case "strider" -> metadataId("net.minecraft.world.entity.monster.Strider", "DATA_BOOST_TIME");
++            default -> -1;
++        });
++        metadataSchema.addProperty("striderSuffocating", registryKey.getPath().equals("strider")
++                ? metadataId("net.minecraft.world.entity.monster.Strider", "DATA_SUFFOCATING") : -1);
++        metadataSchema.addProperty("camelLastPoseChangeTick",
++                registryKey.getPath().equals("camel") || registryKey.getPath().equals("camel_husk")
++                        ? metadataId("net.minecraft.world.entity.animal.camel.Camel", "LAST_POSE_CHANGE_TICK") : -1);
++        metadataSchema.addProperty("happyGhastStaysStill", registryKey.getPath().equals("happy_ghast")
++                ? metadataId("net.minecraft.world.entity.animal.happyghast.HappyGhast", "STAYS_STILL") : -1);
++        entityDesc.add("metadataSchema", metadataSchema);
++
++        JsonArray poseDimensions = new JsonArray();
++        for (Pose pose : Pose.values()) {
++            EntityDimensions dimensions = entityObject != null ? entityObject.getDimensions(pose)
++                    : registryKey.getPath().equals("player")
++                            ? PLAYER_POSES.getOrDefault(pose, PLAYER_POSES.get(Pose.STANDING))
++                            : entityType.getDimensions();
++            JsonObject poseDesc = new JsonObject();
++            poseDesc.addProperty("pose", pose.id());
++            poseDesc.addProperty("width", dimensions.width());
++            poseDesc.addProperty("height", dimensions.height());
++            poseDesc.addProperty("eyeHeight", dimensions.eyeHeight());
++            JsonArray passengers = new JsonArray();
++            for (int index = 0; ; index++) {
++                Vec3 attachment = dimensions.attachments().getNullable(EntityAttachment.PASSENGER, index, 0.0F);
++                if (attachment == null) break;
++                passengers.add(vector(attachment));
++            }
++            poseDesc.add("passengerAttachments", passengers);
++            poseDesc.add("vehicleAttachment", vector(dimensions.attachments()
++                    .get(EntityAttachment.VEHICLE, 0, 0.0F)));
++            poseDimensions.add(poseDesc);
++        }
++        entityDesc.add("poseDimensions", poseDimensions);
++        if (attributes != null) {
++            JsonObject movementAttributes = new JsonObject();
++            movementAttributes.addProperty("gravity", attributes.getValue(Attributes.GRAVITY));
++            movementAttributes.addProperty("scale", attributes.getValue(Attributes.SCALE));
++            movementAttributes.addProperty("stepHeight", attributes.getValue(Attributes.STEP_HEIGHT));
++            movementAttributes.addProperty("movementSpeed", attributes.getValue(Attributes.MOVEMENT_SPEED));
++            movementAttributes.addProperty("movementEfficiency",
++                    attributes.getValue(Attributes.MOVEMENT_EFFICIENCY));
++            movementAttributes.addProperty("waterMovementEfficiency",
++                    attributes.getValue(Attributes.WATER_MOVEMENT_EFFICIENCY));
++            movementAttributes.addProperty("bounciness", attributes.getValue(Attributes.BOUNCINESS));
++            entityDesc.add("movementAttributes", movementAttributes);
++        }
++        if (entityObject != null) {
++            entityObject.discard();
++        }
+ 
+         return entityDesc;
+     }
+ 
++    private static JsonArray vector(Vec3 vector) {
++        JsonArray result = new JsonArray();
++        result.add(vector.x());
++        result.add(vector.y());
++        result.add(vector.z());
++        return result;
++    }
++
++    private static int metadataId(String className, String fieldName) {
++        try {
++            Field field = Class.forName(className).getDeclaredField(fieldName);
++            field.setAccessible(true);
++            return ((net.minecraft.network.syncher.EntityDataAccessor<?>) field.get(null)).id();
++        } catch (ReflectiveOperationException exception) {
++            throw new IllegalStateException(
++                    "Cannot read fixed metadata accessor " + className + "." + fieldName, exception);
++        }
++    }
++
++    @SuppressWarnings("unchecked")
++    private static Map<Pose, EntityDimensions> playerPoses() {
++        try {
++            Field field = Avatar.class.getDeclaredField("POSES");
++            field.setAccessible(true);
++            return Map.copyOf((Map<Pose, EntityDimensions>) field.get(null));
++        } catch (ReflectiveOperationException exception) {
++            throw new IllegalStateException("Cannot read fixed Avatar pose dimensions", exception);
++        }
++    }
++
+     private static String getCategoryFrom(EntityType<?> entityType) {
+-        if (entityType == EntityType.PLAYER) return "UNKNOWN";
++        Identifier registryKey = DGU.getWorld().registryAccess().lookupOrThrow(Registries.ENTITY_TYPE).getKey(entityType);
++        if (registryKey.getPath().equals("player")) return "UNKNOWN";
+         Entity entity = entityType.create(DGU.getWorld(), EntitySpawnReason.NATURAL);
+         if (entity == null)
+             throw new Error("Entity was null after trying to create a: " + DGU.translateText(entityType.getDescriptionId()));

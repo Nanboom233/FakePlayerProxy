@@ -19,4 +19,6 @@ dependencyResolutionManagement {
 
 rootProject.name = "fake-player-proxy"
 
-include("plugin", "mod")
+include("plugin", "plugin:tools", "mod")
+
+project(":plugin:tools").projectDir = file("plugin/tools")
