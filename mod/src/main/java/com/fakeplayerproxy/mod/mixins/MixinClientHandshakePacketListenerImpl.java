@@ -182,12 +182,12 @@ public abstract class MixinClientHandshakePacketListenerImpl {
         ConsentStore decisionStore = null;
         try {
             decisionStore = ConsentStore.fromFabricConfig();
-            Optional<Boolean> decision = decisionStore.find(serverAddress);
-            if (decision.isPresent()) {
+            Boolean decision = decisionStore.read().get(serverAddress);
+            if (decision != null) {
                 continueLoginAfterConsent(
                         connectionScreen,
                         preparedLogin,
-                        decision.get());
+                        decision);
                 return;
             }
         } catch (RuntimeException | java.io.IOException exception) {
@@ -205,7 +205,7 @@ public abstract class MixinClientHandshakePacketListenerImpl {
                     (allow, remember) -> {
                         if (remember && availableDecisionStore != null) {
                             try {
-                                availableDecisionStore.remember(serverAddress, allow);
+                                availableDecisionStore.write(serverAddress, allow);
                             } catch (RuntimeException | java.io.IOException exception) {
                                 FakePlayerProxyMod.LOGGER.error(
                                         "Cannot save the FakePlayerProxy consent decision for {}",

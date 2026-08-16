@@ -5,12 +5,21 @@
   "name": "FakePlayerProxy Client Mod",
   "description": "Client acknowledgement for patched FakePlayerProxy Velocity login relay.",
   "environment": "client",
+  "entrypoints": {
+    "modmenu": [
+      "com.fakeplayerproxy.mod.gui.FakePlayerProxyConfigScreen"
+    ]
+  },
   "mixins": [
     "fakeplayerproxy-mod.mixins.json"
   ],
   "depends": {
     "fabricloader": ">=0.19.3",
     "minecraft": "=26.2",
-    "java": ">=25"
+    "java": ">=25",
+    "cloth-config": ">=26.2.155 <26.3"
+  },
+  "suggests": {
+    "modmenu": ">=20.0.1 <21"
   }
 }

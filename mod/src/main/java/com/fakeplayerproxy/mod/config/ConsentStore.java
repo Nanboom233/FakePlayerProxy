@@ -6,9 +6,9 @@ import java.nio.file.AtomicMoveNotSupportedException;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.StandardCopyOption;
+import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.Map;
-import java.util.Optional;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
@@ -31,14 +31,23 @@ public final class ConsentStore {
                 .resolve("consent_store.toml"));
     }
 
-    public synchronized Optional<Boolean> find(String serverAddress) throws IOException {
-        return Optional.ofNullable(readDecisions().get(serverAddress));
+    public synchronized Map<String, Boolean> read() throws IOException {
+        return readDecisions();
     }
 
-    public synchronized void remember(String serverAddress, boolean allow) throws IOException {
+    public synchronized void write(String serverAddress, boolean allow) throws IOException {
         Map<String, Boolean> decisions = readDecisions();
         decisions.put(serverAddress, allow);
+        writeDecisions(decisions);
+    }
 
+    public synchronized void delete(String serverAddress) throws IOException {
+        Map<String, Boolean> decisions = readDecisions();
+        decisions.remove(serverAddress);
+        writeDecisions(decisions);
+    }
+
+    private void writeDecisions(Map<String, Boolean> decisions) throws IOException {
         Path parent = file.getParent();
         if (parent != null) {
             Files.createDirectories(parent);
@@ -69,6 +78,7 @@ public final class ConsentStore {
 
     private Map<String, Boolean> readDecisions() throws IOException {
         Map<String, Boolean> decisions = new LinkedHashMap<>();
+        var duplicates = new HashSet<String>();
         if (!Files.exists(file)) {
             return decisions;
         }
@@ -82,7 +92,16 @@ public final class ConsentStore {
             if (!matcher.matches()) {
                 throw new IOException("Cannot parse consent store line " + lineNumber + ": " + file);
             }
-            decisions.put(unescape(matcher.group(1)), Boolean.parseBoolean(matcher.group(2)));
+            String address = unescape(matcher.group(1));
+            if (address.isBlank() || duplicates.contains(address)) {
+                continue;
+            }
+            if (decisions.containsKey(address)) {
+                decisions.remove(address);
+                duplicates.add(address);
+                continue;
+            }
+            decisions.put(address, Boolean.parseBoolean(matcher.group(2)));
         }
         return decisions;
     }
