@@ -1,9 +1,14 @@
 {
   "fakeplayerproxy.consent.title": "Allow proxy connection?",
-  "fakeplayerproxy.consent.body": "This server is requesting permission to proxy your connection. If allowed, the server can decrypt, inspect, and modify game data sent over this connection. Server address: %s. Your Minecraft access token is not sent to the server. If you decline, the client will use standard Minecraft encryption and the server will only transparently forward the encrypted TCP traffic.",
+  "fakeplayerproxy.consent.body": "This server is requesting permission to proxy your connection.\n\nIf allowed, the server can decrypt, inspect, and modify game data sent over this connection.\n\nServer address: %s. \n\nYour Minecraft access token is not sent to the server.\n\nIf declined, the client will use standard Minecraft encryption. The server will only transparently forward the encrypted TCP traffic.",
+  "fakeplayerproxy.consent.check": "Do not notify me again for this server.",
   "fakeplayerproxy.consent.warning": "Only allow proxying on servers you trust!",
   "fakeplayerproxy.consent.allow": "Allow",
   "fakeplayerproxy.consent.decline": "Decline",
   "fakeplayerproxy.disconnect.proxy_connection_failed": "Unable to continue the proxy connection. Please try again.",
+  "fakeplayerproxy.disconnect.shadow": "This player is now in shadow state.",
+  "fakeplayerproxy.command.player_required": "Only a player can use this command.",
+  "fakeplayerproxy.command.automation_unavailable": "Automation is not available for this connection.",
+  "fakeplayerproxy.command.shadow_unavailable": "Cannot enable shadow because the backend connection is not active.",
   "fakeplayerproxy.message.encryption_verified": "[FakePlayerProxy] AES encryption/decryption verified."
 }

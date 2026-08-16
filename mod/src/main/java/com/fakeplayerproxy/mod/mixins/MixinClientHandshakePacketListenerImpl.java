@@ -1,9 +1,11 @@
 package com.fakeplayerproxy.mod.mixins;
 
 import com.fakeplayerproxy.mod.FakePlayerProxyMod;
+import com.fakeplayerproxy.mod.config.ConsentStore;
 import com.fakeplayerproxy.mod.gui.FakePlayerProxyConsentScreen;
 import com.fakeplayerproxy.mod.packets.ServerHelloPacketEnvelope;
 import com.llamalad7.mixinextras.sugar.Local;
+
 import java.math.BigInteger;
 import java.security.PublicKey;
 import java.util.Optional;
@@ -47,9 +49,15 @@ import org.spongepowered.asm.mixin.injection.callback.CallbackInfo;
  */
 @Mixin(ClientHandshakePacketListenerImpl.class)
 public abstract class MixinClientHandshakePacketListenerImpl {
-    @Shadow @Final private Connection connection;
-    @Shadow @Final private Screen parent;
-    @Shadow @Final private ServerData serverData;
+    @Shadow
+    @Final
+    private Connection connection;
+    @Shadow
+    @Final
+    private Screen parent;
+    @Shadow
+    @Final
+    private ServerData serverData;
 
     @Shadow
     private Component authenticateServer(String digest) {
@@ -64,7 +72,7 @@ public abstract class MixinClientHandshakePacketListenerImpl {
     }
 
     /**
-     * Stops a supported Hello before authentication or a key response send.
+     * Stops a supported Hello before authentication or a key response is sent.
      *
      * <p>This exact Minecraft 26.2 boundary captures Vanilla's live login values
      * before it constructs {@link ServerboundKeyPacket}. An empty target-key
@@ -149,7 +157,7 @@ public abstract class MixinClientHandshakePacketListenerImpl {
      * Replaces ConnectScreen only after the game thread receives the task.
      *
      * <p>The replacement screen delegates ticks to the current ConnectScreen.
-     * Its native BooleanConsumer receives the immutable prepared login. The
+     * Its consent result callback receives the immutable prepared login. The
      * separate Escape action closes the connection without authentication or a
      * key response.
      */
@@ -169,11 +177,44 @@ public abstract class MixinClientHandshakePacketListenerImpl {
             return;
         }
 
+        String connectionAddress = String.valueOf(this.connection.getRemoteAddress());
+        String serverAddress = this.serverData == null ? connectionAddress : this.serverData.ip;
+        ConsentStore decisionStore = null;
+        try {
+            decisionStore = ConsentStore.fromFabricConfig();
+            Optional<Boolean> decision = decisionStore.find(serverAddress);
+            if (decision.isPresent()) {
+                continueLoginAfterConsent(
+                        connectionScreen,
+                        preparedLogin,
+                        decision.get());
+                return;
+            }
+        } catch (RuntimeException | java.io.IOException exception) {
+            FakePlayerProxyMod.LOGGER.error(
+                    "Cannot read the saved FakePlayerProxy consent decision for {}",
+                    serverAddress,
+                    exception);
+        }
+        ConsentStore availableDecisionStore = decisionStore;
+
         try {
             minecraft.gui.setScreen(new FakePlayerProxyConsentScreen(
                     connectionScreen,
-                    String.valueOf(this.connection.getRemoteAddress()),
-                    allow -> continueLoginAfterConsent(connectionScreen, preparedLogin, allow),
+                    connectionAddress,
+                    (allow, remember) -> {
+                        if (remember && availableDecisionStore != null) {
+                            try {
+                                availableDecisionStore.remember(serverAddress, allow);
+                            } catch (RuntimeException | java.io.IOException exception) {
+                                FakePlayerProxyMod.LOGGER.error(
+                                        "Cannot save the FakePlayerProxy consent decision for {}",
+                                        serverAddress,
+                                        exception);
+                            }
+                        }
+                        continueLoginAfterConsent(connectionScreen, preparedLogin, allow);
+                    },
                     () -> {
                         this.connection.disconnect(ConnectScreen.ABORT_CONNECTION);
                         minecraft.gui.setScreen(this.parent);

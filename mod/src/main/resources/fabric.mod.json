@@ -2,7 +2,7 @@
   "schemaVersion": 1,
   "id": "fakeplayerproxy-mod",
   "version": "${version}",
-  "name": "FakePlayerProxy Mod",
+  "name": "FakePlayerProxy Client Mod",
   "description": "Client acknowledgement for patched FakePlayerProxy Velocity login relay.",
   "environment": "client",
   "mixins": [
