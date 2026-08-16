@@ -241,3 +241,25 @@ Added the patched Velocity relay and packet API, implemented Plugin-owned Automa
 ### Status
 
 [OK] **Completed**
+
+
+## Session 7: Cloth Config consent settings
+
+**Date**: 2026-08-16
+**Task**: Cloth Config consent settings
+**Branch**: `master`
+
+### Summary
+
+Added the Cloth Config consent editor, optional Mod Menu entrypoint, filtered blank and duplicate store keys, focused tests, and frontend contracts.
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `d922dff` | (see git log) |
+| `42316e8` | (see git log) |
+
+### Status
+
+[OK] **Completed**
