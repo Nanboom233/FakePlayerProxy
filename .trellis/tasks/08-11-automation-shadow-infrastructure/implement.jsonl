@@ -1,0 +1,9 @@
+{"file":".trellis/spec/language/java.md","reason":"实现 Java API 和连接 EventLoop 状态。"}
+{"file":".trellis/tasks/08-11-automation-shadow-infrastructure/research/registration-connection-lifecycle.md","reason":"实现 PostLogin、实际登出和配置生命周期。"}
+{"file":".trellis/tasks/08-11-automation-shadow-infrastructure/research/mcprotocollib-world-packets.md","reason":"实现玩家、实体和世界 Packet 状态。"}
+{"file":".trellis/tasks/08-11-automation-shadow-infrastructure/research/vanilla-client-physics-owner.md","reason":"实现客户端 Player 计算责任。"}
+{"file":".trellis/tasks/08-11-automation-shadow-infrastructure/research/physics-data-source.md","reason":"生成固定 26.2 物理数据。"}
+{"file":".trellis/tasks/08-11-automation-shadow-infrastructure/research/player-world-ownership.md","reason":"实现 Player 分层和 Player-owned World 所有权。"}
+{"file":".trellis/tasks/08-11-automation-shadow-infrastructure/research/non-active-position-scope.md","reason":"实现 Entity 关系和全部非主动位置变化。完整源码证据保留在未注入的长审计报告中。"}
+{"file":".trellis/tasks/08-11-automation-shadow-infrastructure/research/vanilla-26.2-missing-state-semantics.md","reason":"按 Vanilla 26.2 实现缺失 Entity、Passenger、Metadata 和 Chunk 的处理语义。该结论覆盖旧研究中的保守未知 Chunk 暂停建议。"}
+{"file":".trellis/tasks/08-11-automation-shadow-infrastructure/research/remaining-movement-failures.md","reason":"实现 Registry P0 后仍独立存在的 transform、Entity collision、Fluid、Boat 和 Piston 修复，并保持共享 Motion 与服务端 fall damage owner。"}

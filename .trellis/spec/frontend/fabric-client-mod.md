@@ -289,3 +289,25 @@ prepareConsentChoices(...);
 
 The correct comment connects the injection point, both branches, and the next
 owner of the prepared login.
+
+## ConsentStore
+
+The consent owner is `com.fakeplayerproxy.mod.config.ConsentStore`.
+
+The store uses `FabricLoader.getInstance().getConfigDir()` and the file
+`fakeplayerproxy/consent_store.toml`. It stores one boolean per server address.
+
+```java
+Optional<Boolean> find(String serverAddress)
+void remember(String serverAddress, boolean allow)
+```
+
+The store uses the JDK file API for the small TOML shape required by this
+project. It does not use Gson, JSON, or a new TOML dependency.
+
+The store does not define a decision enum. A missing key opens the consent
+screen. A stored `true` allows the relay. A stored `false` declines it.
+
+The Mod config boundary must not use `Objects.requireNonNull`, Java `assert`, or
+deliberate validation exceptions. Invalid input and read failures return the
+existing failure value and log the concrete condition.

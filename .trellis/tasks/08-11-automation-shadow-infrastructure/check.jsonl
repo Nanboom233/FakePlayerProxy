@@ -1,0 +1,9 @@
+{"file":".trellis/spec/language/java.md","reason":"检查 Java API 和连接 EventLoop 状态。"}
+{"file":".trellis/tasks/08-11-automation-shadow-infrastructure/research/registration-connection-lifecycle.md","reason":"检查注册、实际登出和配置生命周期。"}
+{"file":".trellis/tasks/08-11-automation-shadow-infrastructure/research/mcprotocollib-world-packets.md","reason":"检查玩家、实体和世界状态。"}
+{"file":".trellis/tasks/08-11-automation-shadow-infrastructure/research/vanilla-client-physics-owner.md","reason":"检查 Player 计算责任边界。"}
+{"file":".trellis/tasks/08-11-automation-shadow-infrastructure/research/physics-data-source.md","reason":"检查物理数据版本和构建边界。"}
+{"file":".trellis/tasks/08-11-automation-shadow-infrastructure/research/player-world-ownership.md","reason":"检查 Player 分层和 Player-owned World 所有权。"}
+{"file":".trellis/tasks/08-11-automation-shadow-infrastructure/research/non-active-position-scope.md","reason":"检查 Entity 关系和全部非主动位置变化。完整源码证据保留在未注入的长审计报告中。"}
+{"file":".trellis/tasks/08-11-automation-shadow-infrastructure/research/vanilla-26.2-missing-state-semantics.md","reason":"检查缺失状态遵循 Vanilla 26.2，并确认没有通用暂停器、等待队列或占位对象。"}
+{"file":".trellis/tasks/08-11-automation-shadow-infrastructure/research/remaining-movement-failures.md","reason":"检查 LevelChunk 修复后的击退、摔落、流体、船、实体碰撞和粘性活塞边界，避免把后续独立缺陷错误并入 Registry 修复。"}

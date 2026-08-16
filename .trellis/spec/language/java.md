@@ -87,6 +87,46 @@ Keep the operation together until its size harms readability or a real reuse
 requirement exists. This convention does not create a dedicated test
 requirement.
 
+## Trivial Field Accessors
+
+When a getter only returns one field, or a setter only assigns its parameter to
+one field, generate it with Lombok `@Getter` or `@Setter`. Do not keep an
+explicit method body for a trivial field accessor. Use `@Accessors(fluent =
+true)` when the established API uses fluent names such as `position()`.
+
+Keep an explicit method when it validates or transforms the value, coordinates
+multiple fields, performs a side effect, returns a derived value, or implements
+domain or override behavior.
+
+### Wrong
+
+```java
+private Vector3d position;
+
+public Vector3d position() {
+    return position;
+}
+```
+
+### Preferred
+
+```java
+@Getter
+@Accessors(fluent = true)
+private Vector3d position;
+```
+
+Validation remains explicit:
+
+```java
+public void setPosition(Vector3d position) {
+    this.position = Objects.requireNonNull(position, "position");
+}
+```
+
+This convention is checked by inspection and review. It does not create a
+dedicated test requirement.
+
 ## Annotation Ownership
 
 Add a new contract annotation only when this project owns the declaration and
@@ -312,3 +352,30 @@ catch (CryptException exception) {
 The validation message states the failed bound. The exception message states
 the failed protocol stage and preserves the complete exception. This convention
 does not create a dedicated test requirement.
+
+## Warning Suppression Scope
+
+Keep every warning suppression at the smallest code scope that fixes the
+reported inspection. Add one English comment immediately before each retained
+suppression. The comment must state the false positive and the owner that
+controls the resource or type.
+
+### Wrong
+
+```java
+@SuppressWarnings("resource")
+public CompletableFuture<Void> register(Player player) {
+    EventLoop eventLoop = getFrontendConnection(player).eventLoop();
+}
+```
+
+### Correct
+
+```java
+// IDEA reports the borrowed Velocity connection as unclosed. Velocity owns its lifecycle.
+//noinspection resource
+EventLoop eventLoop = getFrontendConnection(player).eventLoop();
+```
+
+Do not use a method-level suppression for one local expression. Do not keep a
+suppression that hides a real resource leak.

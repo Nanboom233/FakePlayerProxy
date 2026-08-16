@@ -4,9 +4,8 @@
 
 ### 1. Scope / Trigger
 
-- Trigger: the project now has a Velocity plugin command surface, a generated
-  config file, an embedded upstream protocol client, and a pinned Minecraft
-  protocol target.
+- Trigger: an accepted relay player reaches native `PostLoginEvent` with its
+  original backend already created and paused.
 - Scope: `plugin/src/main/java/com/fakeplayerproxy/**`,
   `plugin/src/main/resources/**`, `plugin/src/test/java/com/fakeplayerproxy/**`, and
   `docs/product/operation-guide.md`.
@@ -19,11 +18,10 @@
   `com.fakeplayerproxy.FakePlayerProxyPlugin`.
 - Commands:
   - `/fpp status`
-  - `/fpp connect [host] [port] [username]`
   - `/fpp disconnect`
   - `/fpp look-north`
-  - `/fpp player self <action>`
-  - `/player self <action>`
+  - `/fpp player shadow`
+  - `/player shadow`
 - Config file:
   `plugins/fakeplayerproxy/fakeplayerproxy.properties`.
 - Config keys:
@@ -37,35 +35,97 @@
 - Protocol target:
   - Minecraft Java `26.2`
   - protocol version `776`
-  - dependency `org.geysermc.mcprotocollib:protocol:26.2-20260709.110151-15`
+  - dependency `org.geysermc.mcprotocollib:protocol:26.2-20260809.160751-16`
   - Netty runtime `4.2.17.Final`
+- Player calculation owners:
+  - `world.entity.Entity.move(...)`
+  - `world.entity.LivingEntity.travel(...)`
+  - `world.player.Player.tick()`
 
 ### 3. Contracts
 
 - `command` parses user-facing command arguments and renders safe messages.
 - `config` owns defaults, file loading, and validation from Java
   `Properties`.
-- `automation` owns connection state and exposes only protocol-neutral request/state
-  objects.
-- `protocol` is the only package allowed to import MCProtocolLib types.
+- `automation` owns per-player protocol, Shadow lifecycle, and action state.
+- `world`, `world/entity`, and `world/player` own world, entity, and player state.
 - `ProtocolTarget` is the single source of truth for the runtime's pinned
   Minecraft version and may be read by commands/docs/tests without importing
   MCProtocolLib.
-- Pin MCProtocolLib build 15 because it supports Java 17. Exclude its Netty
-  `4.2.1.Final` dependency and use Netty `4.2.17.Final`.
-- The runtime allows one upstream client per proxy process.
+- Use Java 21 and pin MCProtocolLib build 16. The plugin uses patched Velocity,
+  MCProtocolLib, and Netty as `compileOnly`; patched Velocity supplies them at runtime.
+- Patched Velocity must include MCProtocolLib's complete non-Netty runtime dependency
+  closure. Velocity continues to own the Netty version. Do not move MCProtocolLib,
+  fastutil, Lombok, or Netty classes into the Plugin JAR.
+- When Plugin source uses Lombok, declare the same Lombok version as `compileOnly`
+  and `annotationProcessor`; Lombok remains compile-time-only and must not be packaged.
+- Fixed Player calculation loads only the committed
+  `minecraft-data/minecraft-data.bin` resource. The binary contains runtime table
+  data only: do not add format/version/commit/hash identity fields or a companion
+  properties resource. Normal builds must not run Minecraft or the data generator.
+- Stable Vanilla Known Pack and Dimension Type values are Java constants. Do not
+  generate or load an Automation registry properties resource.
+- The generator repository's root MIT `LICENSE` is packaged exactly as
+  `minecraft-data/minecraft-data-generator-LICENSE`. Do not package old aliases or
+  duplicate license paths.
+- `AutomationManager` stores `Map<com.velocitypowered.api.proxy.Player, Player>`.
+  The Plugin `Player` wraps the exact Velocity Player and owns its `World` and
+  `AutomationService`. The service stores a final Plugin `Player` owner and no
+  connection field. All mutable state is accessed on that player's connection EventLoop.
 - The protocol version is compile-time pinned. Do not add a runtime
   `minecraftVersion` config key unless the protocol client can actually switch
   codec versions.
-- Auto reconnect is implemented only for `offline-controlled`; online reconnect
-  requires auth material and secret storage before it can be enabled.
-- `/player` is self-only. Accept `self` and the executing player's own username;
-  reject every other target.
+- Shadow never creates a second backend connection and does not reconnect or copy
+  connection secrets.
+- `/player` always uses its command source. Its exact grammar is `/player shadow` and has no target argument.
+- An accepted Mod connection registers from native `PostLoginEvent` using an
+  `EventTask`. Vanilla raw tunnel and ordinary logins have no backend at that point
+  and do not create a service.
+- `/player shadow` uses the exact command-source `Player`, clears input, sends Stop
+  Sprinting, then closes the frontend. `DisconnectEvent.cancel()` retains the
+  original backend only when that exact service is shadowing.
 - `attack`, `use`, `drop`, `dropStack`, and `swapHands` support default/`once`,
   `continuous`, and `interval <ticks>` modes through the automation action scheduler.
-- Scheduled actions pause while the upstream client is not play-ready and resume
-  after offline-controlled auto reconnect. Manual `stop`, `kill`, and shutdown
-  cancel scheduled actions.
+- Scheduled actions run on the connection's 20 TPS EventLoop tick. Manual `stop`,
+  `kill`, service replacement, and shutdown cancel scheduled actions.
+- Decode every Level Chunk section into a temporary array and install the Chunk only
+  after the complete payload succeeds. An unknown or incomplete Chunk is not inserted
+  as loaded air. Collision and fluid queries return no result for that Chunk, and
+  Player calculation continues without a pause state or waiting queue.
+- Send Player Loaded only after the initial position, Level Chunks Load Start, the
+  current decoded Chunk, and GAME state are all available.
+- Shadow Player calculation runs at no more than 20 TPS while GAME is ready, Player
+  Loaded is complete, and the Player is alive. It applies server-authoritative state
+  and runs all Vanilla client position behavior that remains when active player input
+  is zero. Damage, teleport destinations, sleep relocation, respawn destinations, and
+  dimension destinations remain server-authoritative.
+- A configuration switch clears world state and pauses GAME calculation. Sending
+  Finish Configuration restores GAME readiness; otherwise physics and Client Tick End
+  would remain stopped after the switch.
+- Movement output selects PosRot, Pos, Rot, or Status from changes against the last
+  successfully sent frontend baseline. Position correction and manual look preserve
+  and update both `onGround` and `horizontalCollision` in that baseline.
+- Player Position acknowledgement uses `false/false` for its collision baseline.
+  Relative Move Entity decoding advances a separate codec position. A locally
+  authoritative vehicle root advances that codec position without applying the
+  server display transform; Position Sync never overwrites velocity.
+- Movement collision uses the fixed Entity movement-collision value. Entity push is
+  a separate query and remains active for ordinary pushable Living Entities.
+- Water and lava retain separate height/current accumulators. Fluid sampling uses
+  full-height, shallow-immersion, entity averaging/normalization, fluid-specific
+  scale, falling-face, and minimum-current rules. If any required neighboring Chunk
+  is unknown, the whole fluid sample is empty.
+- Piston Block Events construct extension, retraction, sticky-pull, and cancelled
+  transitions from event-time world state. Missing input returns a concrete
+  diagnostic and never creates a placeholder. Moving shapes apply per-shape
+  penetration, piston reaction, per-axis tick limits, Honey carry, Slime velocity,
+  and finalize their moved Block State when complete.
+- A locally authoritative Boat calculates status before generic fluid current, then
+  applies float behavior and zero-input movement. Non-submerged Boats clip passenger
+  fluid interaction. Output order is Paddle, Player Rot, then root Move Vehicle.
+- Entity removal detaches both sides of every vehicle/passenger relation and removes
+  the Entity from that Player's `World`. The Plugin does not retain a removed marker,
+  placeholder Entity, pending relation, or unrelated entity-ground state.
 - `attack` is implemented as a main-hand swing only. Target-aware entity attack
   and block breaking require world/entity tracking and must remain documented as
   deferred.
@@ -77,6 +137,38 @@
 - `dismount` is a shift-input pulse. Vehicle-state-aware behavior remains
   deferred.
 
+## Runtime Package Ownership
+
+`automation/` owns protocol state, Shadow lifecycle, action planning, and action scheduling.
+
+`world/world/` owns the per-player runtime world state.
+
+`world/data/Decoder` decodes and queries immutable fixed-version block, entity,
+shape, item, and Dimension Type data. Known Pack policy belongs to
+`AutomationService`. `world/data/Block` owns one block-state definition and its
+behavior kind.
+
+`world/entity/` owns `Entity`, `LivingEntity`, `Vehicle`, and entity-owned state.
+`world/data/EntityTypeData` owns entity geometry, pose data, nested fixed vehicle
+data, movement kind, and the `affectedByPiston` value.
+
+`world/player/` owns `Player`, Velocity connection access, actual action packet
+execution, player-owned input, passive physics, and movement output.
+
+`world/phys/` contains only `AABB`, `CollisionPhysics`, `FluidPhysics`,
+`VehiclePhysics`, and `PistonPhysics`. These classes contain stateless
+calculations and do not own connections, protocol state, world state, or tick
+state.
+
+`AutomationService` does not proxy world calculations. For example, use IDEA MCP
+symbol analysis and refactoring to move the calculation in
+`AutomationService.lookAt(...)` to `world/player/Player.lookAt(...)`. Update
+`FakePlayerProxyPlugin.onLookAt(...)` to call `Player.lookAt(...)`. Keep the
+backend response and EventLoop ordering in `AutomationService`.
+
+Do not create a second world manager, entity manager, physics manager, handler,
+service, or tick task for this package split.
+
 ### 4. Validation & Error Matrix
 
 | Condition | Result |
@@ -86,31 +178,38 @@
 | Non-numeric port | `config_invalid_port` or `command_invalid_port` |
 | Port outside `1..65535` | `config_invalid_value` or `command_invalid_target` |
 | Username outside `[A-Za-z0-9_]{3,16}` | typed config/command error |
-| Connect while a upstream client is active | `automation_connection_active` |
-| Disconnect while idle | `automation_connection_missing` |
-| Look-north before play state | `automation_not_play_ready` |
-| `/player <other> ...` | `player_not_self` |
-| `/player self hotbar 10` | `player_invalid_hotbar` |
-| `/player self attack interval 0` | `player_invalid_interval` |
-| `/player self drop all` | `DEFERRED` command response |
+| PostLogin has no active original backend | Do not create a service |
+| `/player` source is not a player | `fakeplayerproxy.command.player_required` |
+| `/player` source has no exact service | `fakeplayerproxy.command.automation_unavailable` |
+| Non-shadow action has no exact service | `automation_registration_missing` |
+| `/player hotbar 10` | `player_invalid_hotbar` |
+| `/player attack interval 0` | `player_invalid_interval` |
+| `/player drop all` | `DEFERRED` command response |
 | `proxy.reconnect.authMode` is online/unknown while enabled | `config_invalid_value` |
-| MCProtocolLib startup exception | `automation_connect_start_failed` and safe log |
-| Protocol send failure | `protocol_send_failed` or `automation_action_failed` |
+| Original backend becomes inactive | remove the exact map entry and cancel its tick |
+| `minecraft-data/minecraft-data.bin` is missing or structurally unreadable | Fail resource loading before Player calculation |
+| Level Chunk section decoding fails or leaves trailing section bytes | Do not install or replace that Chunk |
+| A collision or fluid query reaches an unknown Chunk | Return no collision or fluid from that Chunk and continue the Player tick |
+| Finish Configuration completes while Shadow is active | Return to GAME and resume the normal 20 TPS tick |
+| Remove Entities references a tracked entity | Detach its relations and remove it from that Player's World |
 
 ### 5. Good/Base/Bad Cases
 
-- Good: run a local offline-mode Minecraft Java `26.2` server on `25566`, then
-  run `/fpp connect 127.0.0.1 25566 ProxyBot`; `/fpp status` reaches
-  `CONNECTED` with `playReady=true`.
-- Good: after play state, run `/player self attack interval 20`; one main-hand
+- Good: two accepted Mod players can run actions concurrently. Each action uses
+  only the exact command-source `Player` registration and scheduled actions.
+- Good: after play state, run `/player attack interval 20`; one main-hand
   swing is sent immediately, then future swings repeat every 20 Minecraft ticks
-  until `/player self stop`, `/player self kill`, or proxy shutdown.
-- Base: run `/fpp connect` with no arguments; defaults are loaded from
-  `fakeplayerproxy.properties` or bundled defaults.
-- Base: run `/player self drop`; the selected item drop packet is sent once.
+  until `/player stop`, `/player kill`, or proxy shutdown.
+- Base: `/fpp connect` is rejected because Shadow reuses the accepted relay's
+  authenticated backend and cannot create a second connection.
+- Base: run `/player drop`; the selected item drop packet is sent once.
+- Base: a dead Shadow continues required protocol ticks but does not calculate
+  movement or auto-respawn.
 - Bad: run against a non-`26.2` upstream server. The runtime may disconnect during
   login or packet handling because packet IDs and shapes are version-specific.
-- Bad: run `/player self drop all`; the command returns deferred because full
+- Bad: treat an absent Chunk as air or add editable metadata/hash checks that have
+  no runtime purpose.
+- Bad: run `/player drop all`; the command returns deferred because full
   inventory traversal and destructive slot drops require an inventory tracker
   and product-level confirmation flow.
 
@@ -124,32 +223,41 @@
   - empty connect args use defaults;
   - explicit host/port/username override defaults;
   - invalid or extra args return typed errors.
-- State service:
-  - active connection rejects duplicate connect;
-  - play-ready callback enables look-north;
-  - disconnect callback returns to idle;
-  - startup failure sets failed and permits retry;
-  - unexpected disconnect schedules offline auto reconnect;
-  - intentional disconnect does not auto reconnect.
-- Carpet command parser:
-  - self/own-name accepted and other targets rejected;
-  - `look`, `turn`, `hotbar`, `move`, `jump`, `sneak`, `sprint`, `attack`,
-    `use`, `drop`, `dropStack`, `swapHands`, and `dismount` parsed;
-  - `attack`, `use`, `drop`, `dropStack`, and `swapHands` action modes parsed;
-  - full-inventory, entity-target, block-target, and vehicle-sensitive commands
-    marked deferred;
-  - `mount anything` marked unsupported.
-- State service:
-  - simple Carpet packet actions call the protocol client;
+- Service lifecycle:
+  - a player without the accepted relay backend is not registered;
+  - a fresh same-UUID login replaces only the old exact Player/service pair;
+  - backend loss removes the exact pair and cancels its tick;
+  - Shadow closes only the frontend and retains the original backend.
+- Player command:
+  - exact targetless `shadow` grammar is accepted;
+  - an inserted target, extra argument, or other action is rejected;
+  - suggestions contain only `shadow`.
+- Per-player automation service:
+  - two exact Player registrations keep their input and scheduled actions isolated;
+  - fresh login removes the old exact Player/service pair and closes it on the old EventLoop;
+  - an old tick cannot remove the fresh Player/service pair;
+  - simple Carpet packet actions use that Player's existing backend;
   - interval actions repeat until `stopActions`;
   - scheduled actions are canceled by manual stop/kill/shutdown.
 - Protocol target:
   - `ProtocolTarget` pins Minecraft Java `26.2`, protocol `776`, and
-    MCProtocolLib `26.2-20260709.110151-15`.
+    MCProtocolLib `26.2-20260809.160751-16`.
   - The resolved runtime uses Netty `4.2.17.Final`.
 - Boundary:
-  - grep for MCProtocolLib imports; concrete MCProtocolLib types should appear
-    only under `plugin/src/main/java/com/fakeplayerproxy/protocol`.
+  - the service stores one final Plugin `Player` owner and no connection field;
+  - no command resolves a Player by UUID during normal routing;
+  - Patch files contain generic Velocity APIs only and no Plugin automation code.
+- Fixed Player calculation:
+  - deterministic compact export reproduces the committed runtime-only binary;
+  - the JAR contains only the exact binary and generator-license resource paths;
+  - stable Known Pack and Dimension Type values come from Java constants;
+  - Chunk decode installs only a complete section array and preserves the old state
+    after malformed input;
+  - existing tests are reused after owner migration instead of copied;
+  - independent World, relation, Player calculation, `MovementKind`, correction,
+    and tick-rate branches have representative behavior assertions;
+  - equivalent Packet, Metadata, Attribute, Entity Type, and Block State cases do
+    not receive separate tests when they execute the same production branch.
 
 ### 7. Wrong vs Correct
 
@@ -181,6 +289,24 @@ public static final String MINECRAFT_VERSION = "26.2";
 public static final int PROTOCOL_VERSION = 776;
 ```
 
+#### Wrong: Runtime Metadata Layer
+
+```text
+Load a companion metadata file and compare hashes, versions, or generator commits.
+```
+
+These values do not select runtime behavior and create a second, misleading data
+layer.
+
+#### Correct: Runtime-Only Minecraft Data
+
+```java
+private static final String RESOURCE = "/minecraft-data/minecraft-data.bin";
+```
+
+Load and structurally decode the one committed binary. Package the generator notice
+as `minecraft-data/minecraft-data-generator-LICENSE`.
+
 ## Scenario: Velocity Server Hello, Transfer Fallback, And Direct Relay
 
 ### 1. Scope / Trigger
@@ -189,6 +315,10 @@ public static final int PROTOCOL_VERSION = 776;
   flow through a modified Server Hello.
 - Scope: patched online-mode Velocity, Minecraft 26.2 Vanilla and Fabric
   clients, and one fixed online-mode target server.
+- Scope: `plugin/patch/*.patch` is the Velocity patch set. The set can contain
+  more than one patch file. Patch files contain no test source.
+- Each patch file owns one complete function. Do not group patches by changed
+  file, task, or development date.
 - An accepted Mod connection uses the direct packet relay. Its client-generated
   AES secret lets Velocity decrypt and proxy both protected streams. A Vanilla
   or declined Mod connection completes a short first login, reconnects through
@@ -199,9 +329,20 @@ public static final int PROTOCOL_VERSION = 776;
 - Connection proof message: one green clientbound translatable system chat
   component with key `fakeplayerproxy.message.encryption_verified`; its English
   rendering is `[FakePlayerProxy] AES encryption/decryption verified.`.
-- Plugin hook: `FakePlayerProxyPlugin.onServerPostConnect(ServerPostConnectEvent)`.
+- Registration hook: `FakePlayerProxyPlugin.onPostLogin(PostLoginEvent)`.
+- Proof hook: `FakePlayerProxyPlugin.onServerPostConnect(ServerPostConnectEvent)`.
+- Generic patch API: concrete `ServerboundPacketEvent<T>` and
+  `ClientboundPacketEvent<T>`, plus
+  `MinecraftConnection.sendPacket(Packet, boolean)` and cancellable `DisconnectEvent`.
+- Velocity patch set: `plugin/patch/*.patch`, applied in ascending file-name
+  order.
+- Patch file name: `<sequence>-<function>.patch`.
+
 - IntelliJ IDEA exposes only `server/releaseJar` and `server/runServer`, invoking
   `:plugin:releaseJar` and `:plugin:runServer` respectively.
+- `releaseJar` builds production artifacts only, and `runServer` prepares and
+  starts those artifacts. Neither task compiles or executes test source, nor
+  depends on `Test`, `check`, `patchCheck`, or another verification task.
 - Server Hello carrier: a proxy RSA-1024 SPKI with the original target SPKI in an
   OCTET STRING AlgorithmIdentifier parameter encoded as
   `FPPMOD || 0x01 || VarInt(targetKeyLength) || targetSPKI`; original target
@@ -273,17 +414,36 @@ public static final int PROTOCOL_VERSION = 776;
 - `K` is used for packet encryption/decryption and proxying. It is not an
   authentication credential or a substitute for Mojang authentication.
 - Keep connection-proof injection in the Velocity plugin, not the core patch.
-  `ServerPostConnectEvent` is emitted after the backend join has completed; its
-  subscriber sends the proof once to that event's player.
+  Native `PostLoginEvent` identifies an accepted relay because its original backend
+  already exists at that point. Registration completes on the connection EventLoop.
+- Shadow state keeps the same `ConnectedPlayer`, `connectedServer`, backend
+  connection, cipher state, codecs, and `BackendPlaySessionHandler`. It does not
+  create another connection, copy AES secret `K`, or move protocol state.
+- Before backend teardown, Velocity publishes and waits for `DisconnectEvent`.
+  Cancellation unregisters the old `Player` but keeps the backend and resumes reads;
+  ordinary disconnect remains unchanged.
+- After the frontend closes, the existing backend handler stays installed. Plugin
+  Packet Event listeners maintain protocol responses, player/entity/world state,
+  and the 20 TPS service tick on the same connection EventLoop.
+- `AutomationManager` stores one exact Velocity Player to Plugin `Player` mapping.
+  Fresh login scans the authenticated UUID only during registration, removes the old
+  exact mapping, and closes the old Plugin `Player` on its old EventLoop before saving
+  the fresh mapping.
+- A fresh login runs the same registration flow. It creates a new
+  `ConnectedPlayer`, Plugin `Player`, `World`, `AutomationService`, input state, and
+  scheduled actions. The old close callback cannot remove the new registration. There
+  is no reset, reclaim, reattach, transfer, or ownership operation.
 - Secrets are copied at thread boundaries, zeroed when discarded, never logged,
   and cleared on disconnect. Zero AES secret material and its copies. Public
   keys, challenges, acknowledgements, and response-classification bytes are
   public protocol metadata; release them by dropping the owning reference.
 - The fixed Velocity checkout is reference source only. Patch application and the
-  nested Velocity build occur in disposable `plugin/build/server/source/`.
+  nested Velocity build occur in a disposable build checkout separate from
+  `plugin/build/server/source/`.
 - `releaseJar` must be repeatable on Windows: clear read-only attributes inside
   the disposable Git checkout, require its complete deletion, then recreate it
-  before cloning. Never clean or modify a reference checkout.
+  as a worktree from the fixed source checkout. Never clean or modify the reference
+  checkout.
 - `runServer` uses `plugin/run/` as its working directory and deploys the current
   plugin jar to `plugin/run/plugins/` before launch.
 - Reuse Velocity's existing translatable `ConnectionMessages` components for
@@ -294,6 +454,16 @@ public static final int PROTOCOL_VERSION = 776;
 - Keep the Velocity patch minimal. Each changed file and each hunk must implement
   an approved protocol or lifecycle requirement. Remove unrelated formatting,
   import churn, duplicated logic, and speculative fallback paths.
+- Keep production changes in the Velocity patch set. Do not add or change test
+  source in a Velocity patch file.
+- Keep all test source outside the Velocity patch set. A production change can
+  use a separate numbered patch file instead of changing an existing patch.
+- Group patch hunks by function. Keep all production hunks for one function in
+  the same patch file, even when they change multiple Velocity classes.
+- Put independent functions in separate patch files. Do not use one patch file
+  as a chronological record of unrelated changes.
+- Apply all patch files in ascending file-name order. Do not treat one named
+  patch file as the complete patch boundary.
 - Prefer newer Java language features and standard-library APIs when they make
   the patch code more concise, readable, or performant.
 - Reuse an existing Velocity API or handler when it provides the required
@@ -357,10 +527,19 @@ public static final int PROTOCOL_VERSION = 776;
 | Raw bootstrap receives Login Start | Send a `LOGIN` handshake and unchanged Login Start fields, then remove codecs and forward bytes |
 | Raw bootstrap fails before handoff | Send a stable Login disconnect and close both legs; log a diagnostic failure with its complete `Throwable` |
 | Either raw leg closes or a raw write fails after handoff | Close both channels without injecting a Minecraft packet |
-| Re-running `releaseJar` with a previous disposable checkout present | Remove the complete generated checkout, then clone, apply, and build from the stored patch |
-| `ServerPostConnectEvent` in the plugin | Send the connection proof once to the connected player |
+| Re-running `releaseJar` with a previous disposable checkout present | Remove the complete generated worktree, then recreate, apply, and build from the Velocity patch set |
+| PostLogin has the original relay backend | Register the exact Player service on its EventLoop |
+| `/player shadow` has an active backend and false shadow state | Set shadow state, disconnect frontend, and keep the backend connection |
+| `/player shadow` has no active backend or shadow state is already true | Return false and keep the current connection state |
+| Shadow backend receives keepalive | Reply on the same backend connection and consume the packet |
+| Shadow backend disconnects | Exact service tick observes inactive backend and closes the service |
+| Fresh login replaces the same UUID before the old close callback | Keep the fresh registration because removal matches both UUID and value |
 | Connection owning relay state ends | Clear target key/challenge and temporary `K` state |
-| A patch hunk has no direct approved requirement | Remove the hunk from the stored patch |
+| A patch hunk has no direct approved requirement | Remove the hunk from its patch file |
+| The patch directory contains multiple patch files | Apply all patch files in ascending file-name order |
+| One patch file contains independent functions | Split it into one patch file for each function |
+| One function changes multiple Velocity classes | Keep those hunks in the same function patch |
+| A patch file adds or changes test source | Reject the patch file until the test change is outside the patch set |
 
 ### 5. Good/Base/Bad Cases
 
@@ -372,6 +551,12 @@ public static final int PROTOCOL_VERSION = 776;
   listener, and reaches the fixed target through an opaque raw tunnel.
 - Good: existing handler, write-future, pipeline, and connection ownership guard
   the relay, and one future barrier joins the two configuration prerequisites.
+- Good: one numbered patch keeps the base relay change, and a later numbered
+  patch adds an independent production change.
+- Good: an accepted Mod player runs `/player shadow`, the frontend connection
+  closes, and the same backend connection continues through keepalive packets.
+- Good: the player uses a fresh login after the shadow backend closes. The new
+  registration has new input state and scheduled actions.
 - Base: the mod connects to an unpatched server; login bytes and behavior remain vanilla.
 - Bad: a Vanilla client is dropped after classification instead of receiving
   Transfer, or Velocity performs a Mojang join on the client's behalf.
@@ -385,6 +570,9 @@ public static final int PROTOCOL_VERSION = 776;
   machine, or adds a utility for behavior that an existing Velocity API provides.
 - Bad: Transfer is sent immediately, a thread sleeps for the cooldown, or timer
   state and retry parsing duplicate the existing future and connection lifecycle.
+- Bad: shadow creates another backend connection, copies `K`, swaps the play
+  handler, or adds ownership and transfer state.
+- Bad: a Velocity patch file adds a file under an upstream test source directory.
 - Bad: the code has local comments, but a reader cannot follow the full relay from
   the target Hello to target configuration.
 
@@ -408,9 +596,23 @@ public static final int PROTOCOL_VERSION = 776;
 - Do not add a dedicated unit test for the fixed delay or executor selection.
   Verify the observable interval and absence of Paper's throttle disconnect in
   the focused Vanilla live check.
-- Build only the affected mod and pinned Velocity modules after narrow changes,
-  then run `:plugin:releaseJar` to apply and compile the stored patch in the
-  disposable server source directory.
+- Command tests cover targetless grammar, `shadow` service routing, and one
+  existing action routed by exact source `Player`.
+- `AutomationManager` tests cover no-backend exclusion and same-UUID fresh login
+  replacement with exact Player/service removal.
+- `BackendPlaySessionHandler` tests cover the existing frontend branch and the
+  continuation branch for keepalive, backend disconnect, and ordinary packet consume.
+- Keep these tests outside `plugin/patch/*.patch`. No patch file can add or
+  change upstream test source.
+- Do not add dedicated tests for field shape, source text,
+  i18n resources, or fixed implementation details.
+- Build only the affected mod and pinned Velocity modules after narrow changes.
+  Then run `:plugin:releaseJar` to apply and compile the Velocity patch set.
+- `:plugin:test` owns the Java 21 runtime smoke. Its isolated class loader uses
+  the final `velocity.jar` as its only application dependency. The smoke must
+  decode Select Known Packs, round-trip a non-air Chunk Section, and execute the
+  Lombok call used by MCProtocolLib. A class-presence or source-text assertion is
+  not sufficient for this runtime gate.
 - Live-test the Vanilla Transfer/raw fallback, accepted Mod online-backend
   connection and single proof message, declined Mod fallback, Escape behavior,
   and the Mod connection to an unpatched server.
@@ -421,7 +623,7 @@ public static final int PROTOCOL_VERSION = 776;
 #### Wrong
 
 ```text
-git -C <developer-velocity-checkout> apply plugin/patch/0001-server-hello-marker.patch
+git -C <upstream-checkout> apply plugin/patch/0001-login-relay.patch
 ```
 
 This leaves the reference checkout dirty and makes direct edits indistinguishable
@@ -433,8 +635,8 @@ from patch contents.
 .\gradlew.bat :plugin:releaseJar
 ```
 
-The task recreates a disposable checkout under `plugin/build/server/source/`,
-applies only the stored patch, and leaves the reference checkout unchanged.
+The task creates a separate build checkout.
+It applies the Velocity patch set and leaves the reference checkout unchanged.
 
 #### Wrong: Broad Patch
 
@@ -449,6 +651,22 @@ Change only the branch that must relay the target Server Hello.
 ```
 
 The required hunk preserves the existing Velocity behavior around the relay.
+
+#### Wrong: Tests In A Velocity Patch
+
+```text
+plugin/patch/0002-continuation.patch adds proxy/src/test/**
+```
+
+#### Correct: Production-Only Patch Set
+
+```text
+plugin/patch/0001-login-relay.patch
+plugin/patch/0002-automation-connection.patch
+```
+
+Each patch owns one function. The build applies the patch files in file-name
+order. Test source stays outside the Velocity patch set.
 
 #### Wrong: Independent Relay Flags
 
