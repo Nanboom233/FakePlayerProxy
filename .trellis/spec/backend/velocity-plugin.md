@@ -7,31 +7,29 @@
 - Trigger: an accepted relay player reaches native `PostLoginEvent` with its
   original backend already created and paused.
 - Scope: `plugin/src/main/java/com/fakeplayerproxy/**`,
-  `plugin/src/main/resources/**`, `plugin/src/test/java/com/fakeplayerproxy/**`, and
+  `plugin/src/main/resources/**`, `plugin/src/test/java/com/fakeplayerproxy/**`,
+  `mod/src/main/resources/assets/fakeplayerproxy-mod/lang/**`, and
   `docs/product/operation-guide.md`.
-- This runtime contract must not imply online auth, limbo,
-  persistence, or full Carpet `/player` parity.
+- This runtime contract must not imply online auth, limbo, general gameplay
+  persistence, or full Carpet `/player` parity. Only the operator snapshot is
+  persisted as specified below.
 
 ### 2. Signatures
 
 - Velocity plugin main:
   `com.fakeplayerproxy.FakePlayerProxyPlugin`.
 - Commands:
-  - `/fpp status`
-  - `/fpp disconnect`
-  - `/fpp look-north`
-  - `/fpp player shadow`
   - `/player shadow`
-- Config file:
-  `plugins/fakeplayerproxy/fakeplayerproxy.properties`.
-- Config keys:
-  - `proxy.targetHost`
-  - `proxy.targetPort`
-  - `proxy.username`
-  - `proxy.reconnect.enabled`
-  - `proxy.reconnect.maxAttempts`
-  - `proxy.reconnect.delayMillis`
-  - `proxy.reconnect.authMode`
+  - `/player as <player> shadow`
+  - `/fpp op <player>`
+  - `/fpp deop <player>`
+- Player command log: `<username> issued server command: /<command>`
+- Authorization config file:
+  `plugins/fakeplayerproxy/ops.json`.
+- Authorization permission: `fakeplayerproxy.op`.
+- Patched Velocity player API: `Player.refreshCommands()` rebuilds and resends
+  the latest advertised command tree; it is a no-op without an active backend
+  play handler or writable frontend.
 - Protocol target:
   - Minecraft Java `26.2`
   - protocol version `776`
@@ -44,14 +42,12 @@
 
 ### 3. Contracts
 
-- `command` parses user-facing command arguments and renders safe messages.
-- `config` owns defaults, file loading, and validation from Java
-  `Properties`.
+- `command` owns the local Brigadier roots, parses user-facing arguments, and
+  renders translated messages.
+- `config` owns the validated immutable operator snapshot, atomic `ops.json`
+  replacement, and the FPP permission-provider wrapper.
 - `automation` owns per-player protocol, Shadow lifecycle, and action state.
 - `world`, `world/entity`, and `world/player` own world, entity, and player state.
-- `ProtocolTarget` is the single source of truth for the runtime's pinned
-  Minecraft version and may be read by commands/docs/tests without importing
-  MCProtocolLib.
 - Use Java 21 and pin MCProtocolLib build 16. The plugin uses patched Velocity,
   MCProtocolLib, and Netty as `compileOnly`; patched Velocity supplies them at runtime.
 - Patched Velocity must include MCProtocolLib's complete non-Netty runtime dependency
@@ -72,12 +68,48 @@
   The Plugin `Player` wraps the exact Velocity Player and owns its `World` and
   `AutomationService`. The service stores a final Plugin `Player` owner and no
   connection field. All mutable state is accessed on that player's connection EventLoop.
-- The protocol version is compile-time pinned. Do not add a runtime
-  `minecraftVersion` config key unless the protocol client can actually switch
-  codec versions.
+- The protocol version is compile-time pinned. Do not add a runtime protocol,
+  target, username, or reconnect configuration surface.
 - Shadow never creates a second backend connection and does not reconnect or copy
   connection secrets.
-- `/player` always uses its command source. Its exact grammar is `/player shadow` and has no target argument.
+- `/player shadow` uses its exact command source. `/player as <player> shadow`
+  resolves an active automation player by case-insensitive authenticated name.
+  Both paths attach the same complete Brigadier action node.
+- `/player` and `/fpp` have no root requirement and remain local to the proxy.
+  Their root literals do not need an executor to prevent forwarding. The patched
+  player command handler consumes a registered and usable Velocity root.
+  Only `/player as`, `/fpp op`, and `/fpp deop` require
+  `fakeplayerproxy.op`; protected suggestions remain behind the same child
+  requirements.
+- `AutomationManager` target lookup and suggestions scan its exact-player map,
+  exclude inactive entries, and never use Velocity's public player registry.
+- `ops.json` is an array of `{ "uuid": <uuid>, "name": <name> }` entries.
+  UUID controls authorization; name is metadata used for display and offline
+  revocation. Missing configuration loads an empty set and malformed content
+  fails closed without automatic replacement.
+- Operator mutations run away from the connection EventLoop, serialize trusted
+  map state, atomically replace `ops.json`, and only then publish the immutable
+  in-memory snapshot.
+- A successful operator mutation refreshes the affected connected player's
+  command tree after publication. The fixed Velocity host deep-copies the latest
+  untouched backend graph, reinjects proxy nodes through current `.requires(...)`
+  predicates, fires `PlayerAvailableCommandsEvent`, and writes only the newest
+  completed revision on the frontend EventLoop.
+- The FPP permission provider installs at `PostOrder.LAST`, returns `TRUE` for
+  the console and stored player UUIDs on `fakeplayerproxy.op`, returns `FALSE`
+  for other subjects on that node, and delegates all other nodes to the
+  previously selected provider.
+- In the patched player `CommandHandler.runCommand`, a registered and usable
+  Velocity root confirms interception before execution. Log immediately with the
+  Vanilla server template. After confirmation, always consume the command. An
+  execution return value or failure must not forward it. Preserve forwarding for
+  an unregistered or unusable root. Do not check command names. Do not add or
+  change a logging configuration.
+- Plugin keys rendered by Velocity are registered from UTF-8 server resource
+  bundles in an Adventure `TranslationRegistry`. This includes command messages
+  and `fakeplayerproxy.disconnect.shadow`. Register the source during
+  initialization and remove it during shutdown. Mod language JSON alone cannot
+  translate a component flattened by the Velocity console.
 - An accepted Mod connection registers from native `PostLoginEvent` using an
   `EventTask`. Vanilla raw tunnel and ordinary logins have no backend at that point
   and do not create a service.
@@ -173,19 +205,27 @@ service, or tick task for this package split.
 
 | Condition | Result |
 | --- | --- |
-| Missing config file | Create it from bundled defaults |
-| Missing required config key | `config_missing_value` |
-| Non-numeric port | `config_invalid_port` or `command_invalid_port` |
-| Port outside `1..65535` | `config_invalid_value` or `command_invalid_target` |
-| Username outside `[A-Za-z0-9_]{3,16}` | typed config/command error |
+| Missing `ops.json` | Load an empty player-operator set |
+| Malformed `ops.json` | Log the validation failure and deny player operators |
+| Atomic operator write fails | Keep the prior file and in-memory snapshot |
+| `/fpp op` target is absent or unauthenticated | Translated unavailable response; no mutation |
+| `/fpp deop` name is absent | Translated not-found response; no mutation |
+| Player enters bare `/player` or `/fpp` | Confirm the registered root, log, and consume without a root executor |
+| Intercepted command execution returns any result or fails | Keep the command consumed; never forward it |
+| Command root is unregistered or unusable by the player | Preserve forwarding and do not use the interception log path |
+| Operator persistence succeeds for a connected player | Publish permissions, then refresh that player's client command tree |
+| Operator persistence fails | Keep the prior permissions and do not refresh the client tree |
+| An older command-tree event completes after a newer refresh | Discard the older revision |
+| Console receives a plugin translatable component | Resolve it through the registered server translation source and console locale |
+| Velocity logs a shadow disconnect | Resolve `fakeplayerproxy.disconnect.shadow` through the server translation source |
 | PostLogin has no active original backend | Do not create a service |
 | `/player` source is not a player | `fakeplayerproxy.command.player_required` |
 | `/player` source has no exact service | `fakeplayerproxy.command.automation_unavailable` |
+| `/player as` target is inactive or absent | `fakeplayerproxy.command.target_unavailable` |
 | Non-shadow action has no exact service | `automation_registration_missing` |
 | `/player hotbar 10` | `player_invalid_hotbar` |
 | `/player attack interval 0` | `player_invalid_interval` |
 | `/player drop all` | `DEFERRED` command response |
-| `proxy.reconnect.authMode` is online/unknown while enabled | `config_invalid_value` |
 | Original backend becomes inactive | remove the exact map entry and cancel its tick |
 | `minecraft-data/minecraft-data.bin` is missing or structurally unreadable | Fail resource loading before Player calculation |
 | Level Chunk section decoding fails or leaves trailing section bytes | Do not install or replace that Chunk |
@@ -200,8 +240,8 @@ service, or tick task for this package split.
 - Good: after play state, run `/player attack interval 20`; one main-hand
   swing is sent immediately, then future swings repeat every 20 Minecraft ticks
   until `/player stop`, `/player kill`, or proxy shutdown.
-- Base: `/fpp connect` is rejected because Shadow reuses the accepted relay's
-  authenticated backend and cannot create a second connection.
+- Base: `/fpp op <player>` records an online authenticated player's UUID and
+  makes the protected branches and their suggestions available without reconnecting.
 - Base: run `/player drop`; the selected item drop packet is sent once.
 - Base: a dead Shadow continues required protocol ticks but does not calculate
   movement or auto-respawn.
@@ -212,26 +252,44 @@ service, or tick task for this package split.
 - Bad: run `/player drop all`; the command returns deferred because full
   inventory traversal and destructive slot drops require an inventory tracker
   and product-level confirmation flow.
+- Bad: update only the permission function and expect the client to discover a
+  protected Brigadier child that was absent from its previously received tree.
 
 ### 6. Tests Required
 
-- Config loader:
-  - defaults load when no user file exists;
-  - user config overrides bundled defaults;
-  - invalid port returns a typed error.
-- Command parsing:
-  - empty connect args use defaults;
-  - explicit host/port/username override defaults;
-  - invalid or extra args return typed errors.
+- Operator configuration:
+  - a missing file loads an empty set;
+  - a valid snapshot survives reload;
+  - malformed content fails closed without rewriting the file;
+  - a failed atomic write does not publish its candidate.
+- Permission provider:
+  - console, stored UUID, other player, live snapshot change, and delegated
+    permission behavior are covered.
 - Service lifecycle:
   - a player without the accepted relay backend is not registered;
   - a fresh same-UUID login replaces only the old exact Player/service pair;
   - backend loss removes the exact pair and cancels its tick;
   - Shadow closes only the frontend and retains the original backend.
 - Player command:
-  - exact targetless `shadow` grammar is accepted;
-  - an inserted target, extra argument, or other action is rejected;
-  - suggestions contain only `shadow`.
+  - the bare root returns handled and does not enter an action;
+  - exact-source `shadow` behavior is preserved;
+  - an authorized target can use the shared `shadow` node;
+  - unauthorized sources cannot enter `as`;
+  - inactive targets report unavailable;
+  - target suggestions read the live active-name snapshot.
+- FPP command:
+  - the bare root returns handled without exposing a configuration branch;
+  - authorized `op` and `deop` persist and apply immediately;
+  - successful online mutations refresh the affected Player, while failed writes do not;
+  - unauthorized sources cannot enter either protected child.
+- Command logging:
+  - a registered and usable player command root uses the Vanilla format before execution;
+  - a confirmed interception remains consumed for every execution outcome;
+  - an unregistered or unusable root does not use the interception log path;
+  - the patch adds no logging configuration.
+- Velocity command graph:
+  - a deep copy preserves shared child nodes, redirects, and child cycles;
+  - mutating the emitted graph does not mutate the retained backend graph.
 - Per-player automation service:
   - two exact Player registrations keep their input and scheduled actions isolated;
   - fresh login removes the old exact Player/service pair and closes it on the old EventLoop;
@@ -239,10 +297,6 @@ service, or tick task for this package split.
   - simple Carpet packet actions use that Player's existing backend;
   - interval actions repeat until `stopActions`;
   - scheduled actions are canceled by manual stop/kill/shutdown.
-- Protocol target:
-  - `ProtocolTarget` pins Minecraft Java `26.2`, protocol `776`, and
-    MCProtocolLib `26.2-20260809.160751-16`.
-  - The resolved runtime uses Netty `4.2.17.Final`.
 - Boundary:
   - the service stores one final Plugin `Player` owner and no connection field;
   - no command resolves a Player by UUID during normal routing;
@@ -287,6 +341,37 @@ proxy.minecraftVersion=1.21.5
 ```java
 public static final String MINECRAFT_VERSION = "26.2";
 public static final int PROTOCOL_VERSION = 776;
+```
+
+#### Wrong: Stale Client Command Tree
+
+```java
+operators = Map.copyOf(candidate);
+// The server permission changed, but the client still has its old filtered tree.
+```
+
+#### Correct: Publish Then Refresh
+
+```java
+operators = Map.copyOf(candidate);
+player.refreshCommands();
+```
+
+The refresh rebuilds from the retained backend graph and reuses Velocity's normal
+injector. Do not manually add protected literals or bypass `.requires(...)`.
+
+#### Wrong: Non-Executable Local Root
+
+```java
+var root = literalArgumentBuilder("player");
+```
+
+Velocity treats a bare invocation as unknown and can forward it to the backend.
+
+#### Correct: Locally Handled Root
+
+```java
+var root = literalArgumentBuilder("player").executes(context -> 1);
 ```
 
 #### Wrong: Runtime Metadata Layer
