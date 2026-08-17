@@ -11,7 +11,7 @@ import static org.mockito.Mockito.when;
 
 import com.fakeplayerproxy.automation.AutomationManager;
 import com.fakeplayerproxy.automation.AutomationService;
-import com.fakeplayerproxy.config.PermissionProvider;
+import com.fakeplayerproxy.utils.PermissionProvider;
 import com.mojang.brigadier.CommandDispatcher;
 import com.mojang.brigadier.exceptions.CommandSyntaxException;
 import com.velocitypowered.api.command.CommandSource;

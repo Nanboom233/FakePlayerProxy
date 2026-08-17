@@ -57,6 +57,31 @@ Patch Viewer behavior from patch path layout alone.
 - Do not start or stop a run configuration, debugger session, server, or game
   through IDEA MCP unless the user explicitly authorizes that action.
 
+## Trellis Agent Lifecycle
+
+The main session must not interrupt an active `trellis-research`,
+`trellis-implement`, or `trellis-check` agent. A slow response or a missing
+progress message is not a reason to bypass the Trellis workflow.
+
+Use agent status queries, messages, and waits to coordinate the active agent.
+Let the agent finish or report its own blocker. If the user interrupts the turn,
+keep all agent and workspace changes. Resume the same agent and workflow on the
+next turn.
+
+Wrong:
+
+```text
+The implement agent has not replied yet. Interrupt it and continue implementation
+in the main session.
+```
+
+Correct:
+
+```text
+Check the implement agent status, send a progress request, and wait for its result.
+Keep its current workspace edits while it continues.
+```
+
 ## Project-Owned Build Automation
 
 - Do not add or retain project-owned `.js` or `.mjs` scripts.

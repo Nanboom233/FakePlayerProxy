@@ -1,9 +1,11 @@
 package com.fakeplayerproxy.automation;
 
+import com.fakeplayerproxy.utils.Result;
 import com.fakeplayerproxy.world.entity.Entity;
 import com.fakeplayerproxy.world.player.Player;
 import com.velocitypowered.proxy.connection.MinecraftConnection;
 import io.netty.util.concurrent.ScheduledFuture;
+import it.unimi.dsi.fastutil.Pair;
 import lombok.Getter;
 import net.kyori.adventure.text.Component;
 
@@ -15,6 +17,7 @@ import java.util.Map;
 import java.util.Objects;
 import java.util.Set;
 import java.util.concurrent.CompletableFuture;
+import java.util.function.Function;
 
 import org.geysermc.mcprotocollib.network.packet.Packet;
 import org.geysermc.mcprotocollib.protocol.data.game.KnownPack;
@@ -31,9 +34,6 @@ import org.geysermc.mcprotocollib.protocol.packet.ingame.serverbound.level.Serve
 import org.geysermc.mcprotocollib.protocol.packet.ingame.serverbound.level.ServerboundChunkBatchReceivedPacket;
 import org.geysermc.mcprotocollib.protocol.packet.ingame.serverbound.player.ServerboundMovePlayerPosRotPacket;
 import org.geysermc.mcprotocollib.protocol.packet.ingame.serverbound.player.ServerboundMovePlayerRotPacket;
-import com.fakeplayerproxy.util.ProxyError;
-import com.fakeplayerproxy.util.ProxyResult;
-import java.util.function.Function;
 
 /** Mutable state for one authenticated relay connection. Access is restricted to its EventLoop. */
 public final class AutomationService {
@@ -41,7 +41,7 @@ public final class AutomationService {
     private static final Set<KnownPack> SUPPORTED_KNOWN_PACKS = Set.of(
             new KnownPack("minecraft", "core", "26.2"));
 
-    private final Map<ScheduledAction, ScheduledActionState> scheduledActions =
+    private final Map<ScheduledAction, Pair<Integer, Integer>> scheduledActions =
             new EnumMap<>(ScheduledAction.class);
 
     private final Player owner;
@@ -245,18 +245,18 @@ public final class AutomationService {
         return CompletableFuture.completedFuture(true);
     }
 
-    public ProxyResult<Void> stopActions() {
+    public Result<Void, String> stopActions() {
         return runAction(backend -> {
             scheduledActions.clear();
             return owner.stopActions(backend);
         });
     }
 
-    public ProxyResult<Void> look(float yaw, float pitch) {
+    public Result<Void, String> look(float yaw, float pitch) {
         return runAction(backend -> owner.look(backend, yaw, pitch));
     }
 
-    public ProxyResult<Void> turn(float yawDelta, float pitchDelta) {
+    public Result<Void, String> turn(float yawDelta, float pitchDelta) {
         return runAction(backend -> owner.look(
                 backend,
                 owner.yaw() + yawDelta,
@@ -266,17 +266,17 @@ public final class AutomationService {
 
     // The exact-shadow command does not expose this retained Automation action yet.
     @SuppressWarnings("unused")
-    public ProxyResult<Void> selectHotbar(int slotOneBased) {
+    public Result<Void, String> selectHotbar(int slotOneBased) {
         return runAction(backend -> owner.selectHotbar(backend, slotOneBased));
     }
 
-    public ProxyResult<Void> move(String direction) {
+    public Result<Void, String> move(String direction) {
         return runAction(backend -> owner.moveInput(backend, direction));
     }
 
     // The exact-shadow command does not expose this retained Automation action yet.
     @SuppressWarnings("unused")
-    public ProxyResult<Void> setJump(boolean enabled) {
+    public Result<Void, String> setJump(boolean enabled) {
         return runAction(backend -> {
             scheduledActions.remove(ScheduledAction.JUMP);
             return owner.setJump(backend, enabled);
@@ -285,7 +285,7 @@ public final class AutomationService {
 
     // The exact-shadow command does not expose this retained Automation action yet.
     @SuppressWarnings("unused")
-    public ProxyResult<Void> jumpOnce() {
+    public Result<Void, String> jumpOnce() {
         return runAction(backend -> {
             scheduledActions.remove(ScheduledAction.JUMP);
             return owner.pulseInput(backend, owner.inputState().withJump(true));
@@ -294,42 +294,42 @@ public final class AutomationService {
 
     // The exact-shadow command does not expose this retained Automation action yet.
     @SuppressWarnings("unused")
-    public ProxyResult<Void> jumpInterval(int intervalTicks) {
+    public Result<Void, String> jumpInterval(int intervalTicks) {
         return runAction(backend -> schedule(backend, ScheduledAction.JUMP, ActionMode.INTERVAL, intervalTicks));
     }
 
     // The exact-shadow command does not expose this retained Automation action yet.
     @SuppressWarnings("unused")
-    public ProxyResult<Void> setSneak(boolean enabled) {
+    public Result<Void, String> setSneak(boolean enabled) {
         return runAction(backend -> owner.setSneak(backend, enabled));
     }
 
     // The exact-shadow command does not expose this retained Automation action yet.
     @SuppressWarnings("unused")
-    public ProxyResult<Void> setSprint(boolean enabled) {
+    public Result<Void, String> setSprint(boolean enabled) {
         return runAction(backend -> owner.setSprint(backend, enabled));
     }
 
-    public ProxyResult<Void> attack(ActionMode mode, int intervalTicks) {
+    public Result<Void, String> attack(ActionMode mode, int intervalTicks) {
         return runAction(backend -> schedule(backend, ScheduledAction.ATTACK, mode, intervalTicks));
     }
 
-    public ProxyResult<Void> use(ActionMode mode, int intervalTicks) {
+    public Result<Void, String> use(ActionMode mode, int intervalTicks) {
         return runAction(backend -> schedule(backend, ScheduledAction.USE, mode, intervalTicks));
     }
 
     // The exact-shadow command does not expose this retained Automation action yet.
     @SuppressWarnings("unused")
-    public ProxyResult<Void> dropSelectedItem(boolean stack, ActionMode mode, int intervalTicks) {
+    public Result<Void, String> dropSelectedItem(boolean stack, ActionMode mode, int intervalTicks) {
         return runAction(backend -> schedule(
                 backend, stack ? ScheduledAction.DROP_STACK : ScheduledAction.DROP, mode, intervalTicks));
     }
 
-    public ProxyResult<Void> swapHands(ActionMode mode, int intervalTicks) {
+    public Result<Void, String> swapHands(ActionMode mode, int intervalTicks) {
         return runAction(backend -> schedule(backend, ScheduledAction.SWAP_HANDS, mode, intervalTicks));
     }
 
-    public ProxyResult<Void> dismount() {
+    public Result<Void, String> dismount() {
         return runAction(backend -> owner.pulseInput(backend, owner.inputState().withShift(true)));
     }
 
@@ -342,16 +342,14 @@ public final class AutomationService {
             backend.sendPacket(new ServerboundConfigurationAcknowledgedPacket(), false);
             inGame = false;
         }
-        scheduledActions.replaceAll((action, state) -> new ScheduledActionState(
-                state.periodTicks(), state.remainingTicks() - 1));
-        for (Map.Entry<ScheduledAction, ScheduledActionState> entry : scheduledActions.entrySet()) {
-            ScheduledActionState state = entry.getValue();
-            if (state.remainingTicks() > 0) {
-                continue;
+        scheduledActions.replaceAll((action, state) -> {
+            int remainingTicks = state.right() - 1;
+            if (remainingTicks <= 0) {
+                sendScheduledAction(backend, action);
+                remainingTicks = state.left();
             }
-            sendScheduledAction(backend, entry.getKey());
-            entry.setValue(new ScheduledActionState(state.periodTicks(), state.periodTicks()));
-        }
+            return Pair.of(state.left(), remainingTicks);
+        });
 
         if (shadow && inGame) {
             if (!playerLoaded
@@ -386,26 +384,26 @@ public final class AutomationService {
         });
     }
 
-    private ProxyResult<Void> schedule(
+    private Result<Void, String> schedule(
             MinecraftConnection backend,
             ScheduledAction action,
             ActionMode mode,
             int intervalTicks) {
         Objects.requireNonNull(mode, "mode");
         if (mode == ActionMode.INTERVAL && intervalTicks < 1) {
-            return unavailable("Interval ticks must be 1 or greater.");
+            return new Result.Failure<>("Interval ticks must be 1 or greater.");
         }
-        ProxyResult<Void> first = sendScheduledAction(backend, action);
-        if (!first.isSuccess() || mode == ActionMode.ONCE) {
+        Result<Void, String> first = sendScheduledAction(backend, action);
+        if (first instanceof Result.Failure<Void, String> || mode == ActionMode.ONCE) {
             scheduledActions.remove(action);
             return first;
         }
         int period = mode == ActionMode.CONTINUOUS ? 1 : intervalTicks;
-        scheduledActions.put(action, new ScheduledActionState(period, period));
-        return ProxyResult.success();
+        scheduledActions.put(action, Pair.of(period, period));
+        return new Result.Success<>(null);
     }
 
-    private ProxyResult<Void> sendScheduledAction(
+    private Result<Void, String> sendScheduledAction(
             MinecraftConnection backend, ScheduledAction action) {
         return switch (action) {
             case ATTACK -> owner.attack(backend);
@@ -417,8 +415,8 @@ public final class AutomationService {
         };
     }
 
-    private ProxyResult<Void> runAction(
-            Function<MinecraftConnection, ProxyResult<Void>> action) {
+    private Result<Void, String> runAction(
+            Function<MinecraftConnection, Result<Void, String>> action) {
         // IDEA reports the borrowed EventLoop as unclosed. Velocity owns its lifecycle.
         //noinspection resource
         var eventLoop = owner.eventLoop();
@@ -432,17 +430,13 @@ public final class AutomationService {
                     action.apply(backend);
                 }
             });
-            return ProxyResult.success();
+            return new Result.Success<>(null);
         }
         MinecraftConnection backend = owner.backendConnection();
         if (closed || !inGame || backend == null) {
-            return unavailable("Automation is not in an active game connection.");
+            return new Result.Failure<>("Automation is not in an active game connection.");
         }
         return action.apply(backend);
-    }
-
-    private static ProxyResult<Void> unavailable(String message) {
-        return ProxyResult.failure(new ProxyError("automation_unavailable", message));
     }
 
     public void close() {
@@ -456,9 +450,6 @@ public final class AutomationService {
             tickTask.cancel(false);
             tickTask = null;
         }
-    }
-
-    private record ScheduledActionState(int periodTicks, int remainingTicks) {
     }
 
     private enum ScheduledAction {

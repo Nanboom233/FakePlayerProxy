@@ -1,0 +1,3 @@
+{"file": ".trellis/spec/language/java.md", "reason": "Defines minimal Java type and package structure for the sealed result replacement."}
+{"file": ".trellis/spec/backend/velocity-plugin.md", "reason": "Defines plugin persistence, command, automation, and patch build contracts."}
+{"file": ".trellis/tasks/08-17-deprecated-support-cleanup/research/deprecated-support-audit.md", "reason": "Records patch metadata use and available result type research."}

@@ -13,6 +13,7 @@ import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
+import com.fakeplayerproxy.utils.Result;
 import com.fakeplayerproxy.world.data.Decoder;
 import com.fakeplayerproxy.world.entity.Entity;
 import com.fakeplayerproxy.world.player.Player;
@@ -394,7 +395,7 @@ final class AutomationServiceTest {
     void lookPreservesTheKnownCollisionFlags() {
         player.clientStatus(true, true);
 
-        assertTrue(service.look(45.0f, -15.0f).isSuccess());
+        assertTrue(service.look(45.0f, -15.0f) instanceof Result.Success<?, ?>);
 
         verify(backend).sendPacket(argThat(packet -> packet instanceof ServerboundMovePlayerRotPacket movement
                 && movement.isOnGround()

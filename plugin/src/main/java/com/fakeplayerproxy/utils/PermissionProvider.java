@@ -1,7 +1,5 @@
-package com.fakeplayerproxy.config;
+package com.fakeplayerproxy.utils;
 
-import com.fakeplayerproxy.util.ProxyError;
-import com.fakeplayerproxy.util.ProxyResult;
 import com.google.gson.Gson;
 import com.google.gson.JsonArray;
 import com.google.gson.JsonElement;
@@ -27,6 +25,7 @@ import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.Objects;
+import java.util.Optional;
 import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.CompletableFuture;
@@ -58,22 +57,22 @@ public final class PermissionProvider implements AutoCloseable {
         this.executor = Objects.requireNonNull(executor, "executor");
     }
 
-    public ProxyResult<Void> load() {
+    public Result<Void, String> load() {
         operators = Map.of();
         if (!Files.exists(file)) {
-            return ProxyResult.success();
+            return new Result.Success<>(null);
         }
 
         try (Reader reader = Files.newBufferedReader(file, StandardCharsets.UTF_8)) {
             JsonElement document = JsonParser.parseReader(reader);
             if (!document.isJsonArray()) {
-                return invalid("The operator document must be a JSON array.");
+                return new Result.Failure<>("The operator document must be a JSON array.");
             }
             Map<UUID, String> loaded = new HashMap<>();
             Set<String> names = new HashSet<>();
             for (JsonElement element : document.getAsJsonArray()) {
                 if (!element.isJsonObject()) {
-                    return invalid("Every operator entry must be a JSON object.");
+                    return new Result.Failure<>("Every operator entry must be a JSON object.");
                 }
                 JsonObject object = element.getAsJsonObject();
                 if (!object.keySet().equals(ENTRY_FIELDS)
@@ -81,22 +80,23 @@ public final class PermissionProvider implements AutoCloseable {
                         || !object.get("uuid").getAsJsonPrimitive().isString()
                         || !object.get("name").isJsonPrimitive()
                         || !object.get("name").getAsJsonPrimitive().isString()) {
-                    return invalid("Every operator entry must contain only string uuid and name fields.");
+                    return new Result.Failure<>(
+                            "Every operator entry must contain only string uuid and name fields.");
                 }
                 UUID uuid = UUID.fromString(object.get("uuid").getAsString());
                 String name = object.get("name").getAsString();
                 if (name.isBlank()) {
-                    return invalid("Operator names must not be blank.");
+                    return new Result.Failure<>("Operator names must not be blank.");
                 }
                 if (loaded.putIfAbsent(uuid, name) != null
                         || !names.add(name.toLowerCase(Locale.ROOT))) {
-                    return invalid("Operator UUIDs and names must be unique.");
+                    return new Result.Failure<>("Operator UUIDs and names must be unique.");
                 }
             }
             operators = Map.copyOf(loaded);
-            return ProxyResult.success();
+            return new Result.Success<>(null);
         } catch (IOException | IllegalArgumentException | JsonParseException exception) {
-            return invalid("Could not read a valid ops.json: " + exception.getMessage());
+            return new Result.Failure<>("Could not read a valid ops.json: " + exception.getMessage());
         }
     }
 
@@ -124,7 +124,7 @@ public final class PermissionProvider implements AutoCloseable {
         return operators.values().stream().sorted(String.CASE_INSENSITIVE_ORDER).toList();
     }
 
-    public CompletableFuture<ProxyResult<String>> grant(Player player) {
+    public CompletableFuture<Result<String, String>> grant(Player player) {
         Objects.requireNonNull(player, "player");
         UUID uuid = player.getUniqueId();
         String name = player.getUsername();
@@ -133,14 +133,15 @@ public final class PermissionProvider implements AutoCloseable {
             candidate.entrySet().removeIf(entry -> entry.getKey().equals(uuid)
                     || entry.getValue().equalsIgnoreCase(name));
             candidate.put(uuid, name);
-            ProxyResult<Void> saved = save(candidate);
-            return saved.isSuccess()
-                    ? ProxyResult.success(name)
-                    : ProxyResult.failure(saved.errorOrThrow());
+            Result<Void, String> saved = save(candidate);
+            return switch (saved) {
+                case Result.Success<Void, String>(var ignored) -> new Result.Success<>(name);
+                case Result.Failure<Void, String>(var error) -> new Result.Failure<>(error);
+            };
         }, executor);
     }
 
-    public CompletableFuture<ProxyResult<String>> revoke(String name) {
+    public CompletableFuture<Result<Optional<String>, String>> revoke(String name) {
         Objects.requireNonNull(name, "name");
         return CompletableFuture.supplyAsync(() -> {
             var removed = operators.entrySet().stream()
@@ -148,19 +149,20 @@ public final class PermissionProvider implements AutoCloseable {
                     .findFirst()
                     .orElse(null);
             if (removed == null) {
-                return ProxyResult.failure(new ProxyError(
-                        "operator_not_found", "No saved operator has the name " + name + "."));
+                return new Result.Success<>(Optional.empty());
             }
             Map<UUID, String> candidate = new HashMap<>(operators);
             candidate.remove(removed.getKey());
-            ProxyResult<Void> saved = save(candidate);
-            return saved.isSuccess()
-                    ? ProxyResult.success(removed.getValue())
-                    : ProxyResult.failure(saved.errorOrThrow());
+            Result<Void, String> saved = save(candidate);
+            return switch (saved) {
+                case Result.Success<Void, String>(var ignored) ->
+                        new Result.Success<>(Optional.of(removed.getValue()));
+                case Result.Failure<Void, String>(var error) -> new Result.Failure<>(error);
+            };
         }, executor);
     }
 
-    private ProxyResult<Void> save(Map<UUID, String> candidate) {
+    private Result<Void, String> save(Map<UUID, String> candidate) {
         Path temporary = null;
         try {
             Files.createDirectories(dataDirectory);
@@ -181,13 +183,13 @@ public final class PermissionProvider implements AutoCloseable {
                     StandardCopyOption.ATOMIC_MOVE, StandardCopyOption.REPLACE_EXISTING);
             temporary = null;
             operators = Map.copyOf(candidate);
-            return ProxyResult.success();
+            return new Result.Success<>(null);
         } catch (AtomicMoveNotSupportedException exception) {
-            return ProxyResult.failure(new ProxyError(
-                    "operator_write_failed", "The filesystem does not support atomic ops.json replacement."));
+            return new Result.Failure<>(
+                    "The filesystem does not support atomic ops.json replacement.");
         } catch (IOException exception) {
-            return ProxyResult.failure(new ProxyError(
-                    "operator_write_failed", "Could not atomically write ops.json: " + exception.getMessage()));
+            return new Result.Failure<>(
+                    "Could not atomically write ops.json: " + exception.getMessage());
         } finally {
             if (temporary != null) {
                 try {
@@ -197,10 +199,6 @@ public final class PermissionProvider implements AutoCloseable {
                 }
             }
         }
-    }
-
-    private static <T> ProxyResult<T> invalid(String message) {
-        return ProxyResult.failure(new ProxyError("operator_config_invalid", message));
     }
 
     @Override

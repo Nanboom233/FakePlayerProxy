@@ -3,7 +3,8 @@ package com.fakeplayerproxy;
 import com.fakeplayerproxy.automation.AutomationManager;
 import com.fakeplayerproxy.command.FppCommand;
 import com.fakeplayerproxy.command.PlayerCommand;
-import com.fakeplayerproxy.config.PermissionProvider;
+import com.fakeplayerproxy.utils.PermissionProvider;
+import com.fakeplayerproxy.utils.Result;
 import com.fakeplayerproxy.world.data.Decoder;
 import com.google.inject.Inject;
 import com.velocitypowered.api.command.BrigadierCommand;
@@ -129,9 +130,9 @@ public final class FakePlayerProxyPlugin {
 
         server.getEventManager().register(this, permissionProvider);
         var loadedOperators = permissionProvider.load();
-        if (!loadedOperators.isSuccess()) {
+        if (loadedOperators instanceof Result.Failure<Void, String>(var error)) {
             logger.warn("Cannot load FakePlayerProxy operators; player access remains denied: {}",
-                    loadedOperators.errorOrThrow().safeMessage());
+                    error);
         }
 
         CommandManager commandManager = server.getCommandManager();

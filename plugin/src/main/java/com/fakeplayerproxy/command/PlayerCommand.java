@@ -4,7 +4,7 @@ import static com.velocitypowered.api.command.BrigadierCommand.literalArgumentBu
 import static com.velocitypowered.api.command.BrigadierCommand.requiredArgumentBuilder;
 
 import com.fakeplayerproxy.automation.AutomationManager;
-import com.fakeplayerproxy.config.PermissionProvider;
+import com.fakeplayerproxy.utils.PermissionProvider;
 import com.mojang.brigadier.arguments.StringArgumentType;
 import com.mojang.brigadier.context.CommandContext;
 import com.mojang.brigadier.suggestion.Suggestions;

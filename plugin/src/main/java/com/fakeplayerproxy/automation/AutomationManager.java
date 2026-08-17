@@ -1,7 +1,5 @@
 package com.fakeplayerproxy.automation;
 
-import com.fakeplayerproxy.util.ProxyError;
-import com.fakeplayerproxy.util.ProxyResult;
 import com.fakeplayerproxy.world.player.Player;
 import com.velocitypowered.proxy.connection.MinecraftConnection;
 
@@ -126,31 +124,6 @@ public final class AutomationManager {
         return !player.automationService().isClosed() && player.backendConnection() != null;
     }
 
-    public ProxyResult<Void> closeBackend(com.velocitypowered.api.proxy.Player velocityPlayer) {
-        Player player = players.get(velocityPlayer);
-        if (player == null) {
-            return missing();
-        }
-        var eventLoop = player.eventLoop();
-        if (eventLoop.inEventLoop()) {
-            MinecraftConnection backend = player.backendConnection();
-            if (backend == null) {
-                return missing();
-            }
-            backend.close();
-            return ProxyResult.success();
-        }
-        eventLoop.execute(() -> {
-            if (players.get(velocityPlayer) == player) {
-                MinecraftConnection backend = player.backendConnection();
-                if (backend != null) {
-                    backend.close();
-                }
-            }
-        });
-        return ProxyResult.success();
-    }
-
     private void tick(com.velocitypowered.api.proxy.Player velocityPlayer, Player player) {
         AutomationService service = player.automationService();
         if (players.get(velocityPlayer) != player) {
@@ -176,11 +149,5 @@ public final class AutomationManager {
                 eventLoop.execute(player.automationService()::close);
             }
         });
-    }
-
-    private static ProxyResult<Void> missing() {
-        return ProxyResult.failure(new ProxyError(
-                "automation_registration_missing",
-                "No automation is registered for this player."));
     }
 }

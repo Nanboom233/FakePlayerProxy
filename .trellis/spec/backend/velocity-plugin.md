@@ -44,7 +44,7 @@
 
 - `command` owns the local Brigadier roots, parses user-facing arguments, and
   renders translated messages.
-- `config` owns the validated immutable operator snapshot, atomic `ops.json`
+- `utils` owns the validated immutable operator snapshot, atomic `ops.json`
   replacement, and the FPP permission-provider wrapper.
 - `automation` owns per-player protocol, Shadow lifecycle, and action state.
 - `world`, `world/entity`, and `world/player` own world, entity, and player state.
@@ -326,7 +326,7 @@ import org.geysermc.mcprotocollib.protocol.packet.ingame.serverbound.player.Serv
 
 ```java
 // Command layer calls a protocol-neutral service method.
-ProxyResult<Void> result = automationService.lookNorth();
+Result<Void, String> result = automationService.lookNorth();
 ```
 
 #### Wrong

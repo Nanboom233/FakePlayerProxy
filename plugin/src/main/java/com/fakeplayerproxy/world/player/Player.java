@@ -1,8 +1,7 @@
 package com.fakeplayerproxy.world.player;
 
 import com.fakeplayerproxy.automation.AutomationService;
-import com.fakeplayerproxy.util.ProxyError;
-import com.fakeplayerproxy.util.ProxyResult;
+import com.fakeplayerproxy.utils.Result;
 import com.fakeplayerproxy.world.data.Decoder;
 import com.fakeplayerproxy.world.world.World;
 import com.fakeplayerproxy.world.entity.Entity;
@@ -146,71 +145,73 @@ public final class Player extends LivingEntity {
         this.inputState = Objects.requireNonNull(inputState, "inputState");
     }
 
-    public ProxyResult<Void> stopActions(MinecraftConnection backend) {
+    public Result<Void, String> stopActions(MinecraftConnection backend) {
         setInputState(InputState.CLEAR);
         return send(backend, inputPacket(inputState));
     }
 
-    public ProxyResult<Void> look(MinecraftConnection backend, float yaw, float pitch) {
+    public Result<Void, String> look(MinecraftConnection backend, float yaw, float pitch) {
         setRotation(yaw, clampPitch(pitch));
-        ProxyResult<Void> result = send(backend, new ServerboundMovePlayerRotPacket(
+        Result<Void, String> result = send(backend, new ServerboundMovePlayerRotPacket(
                 onGround(), horizontalCollision(), yaw(), pitch()));
-        if (result.isSuccess()) {
+        if (result instanceof Result.Success<Void, String>) {
             clientRotation(yaw(), pitch(), onGround(), horizontalCollision());
         }
         return result;
     }
 
-    public ProxyResult<Void> selectHotbar(MinecraftConnection backend, int slotOneBased) {
+    public Result<Void, String> selectHotbar(MinecraftConnection backend, int slotOneBased) {
         if (slotOneBased < 1 || slotOneBased > 9) {
             return unavailable("Hotbar slot must be 1 through 9.");
         }
         return send(backend, new ServerboundSetCarriedItemPacket(slotOneBased - 1));
     }
 
-    public ProxyResult<Void> moveInput(MinecraftConnection backend, String direction) {
+    public Result<Void, String> moveInput(MinecraftConnection backend, String direction) {
         setInputState(inputState.withMovement(direction));
         return send(backend, inputPacket(inputState));
     }
 
-    public ProxyResult<Void> setJump(MinecraftConnection backend, boolean enabled) {
+    public Result<Void, String> setJump(MinecraftConnection backend, boolean enabled) {
         setInputState(inputState.withJump(enabled));
         return send(backend, inputPacket(inputState));
     }
 
-    public ProxyResult<Void> setSneak(MinecraftConnection backend, boolean enabled) {
+    public Result<Void, String> setSneak(MinecraftConnection backend, boolean enabled) {
         setInputState(inputState.withShift(enabled));
         return send(backend, inputPacket(inputState));
     }
 
-    public ProxyResult<Void> setSprint(MinecraftConnection backend, boolean enabled) {
+    public Result<Void, String> setSprint(MinecraftConnection backend, boolean enabled) {
         setInputState(inputState.withSprint(enabled));
-        ProxyResult<Void> input = send(backend, inputPacket(inputState));
-        if (!input.isSuccess()) {
+        Result<Void, String> input = send(backend, inputPacket(inputState));
+        if (input instanceof Result.Failure<Void, String>) {
             return input;
         }
         PlayerState state = enabled ? PlayerState.START_SPRINTING : PlayerState.STOP_SPRINTING;
         return send(backend, new ServerboundPlayerCommandPacket(id(), state));
     }
 
-    public ProxyResult<Void> pulseInput(MinecraftConnection backend, InputState pulse) {
-        ProxyResult<Void> pressed = send(backend, inputPacket(pulse));
-        return pressed.isSuccess() ? send(backend, inputPacket(inputState)) : pressed;
+    public Result<Void, String> pulseInput(MinecraftConnection backend, InputState pulse) {
+        Result<Void, String> pressed = send(backend, inputPacket(pulse));
+        return pressed instanceof Result.Failure<Void, String>
+                ? pressed
+                : send(backend, inputPacket(inputState));
     }
 
-    public ProxyResult<Void> attack(MinecraftConnection backend) {
+    public Result<Void, String> attack(MinecraftConnection backend) {
         return send(backend, new ServerboundSwingPacket(Hand.MAIN_HAND));
     }
 
-    public ProxyResult<Void> use(MinecraftConnection backend) {
+    public Result<Void, String> use(MinecraftConnection backend) {
         return send(backend, new ServerboundUseItemPacket(Hand.MAIN_HAND, 0, yaw(), pitch()));
     }
 
-    public ProxyResult<Void> drop(MinecraftConnection backend, boolean stack) {
+    public Result<Void, String> drop(MinecraftConnection backend, boolean stack) {
         return send(backend, playerAction(stack ? PlayerAction.DROP_ITEM_STACK : PlayerAction.DROP_ITEM));
     }
 
-    public ProxyResult<Void> swapHands(MinecraftConnection backend) {
+    public Result<Void, String> swapHands(MinecraftConnection backend) {
         return send(backend, playerAction(PlayerAction.SWAP_HANDS));
     }
 
@@ -229,16 +230,16 @@ public final class Player extends LivingEntity {
                 input.jump(), input.shift(), input.sprint());
     }
 
-    private static ProxyResult<Void> send(MinecraftConnection backend, Packet packet) {
+    private static Result<Void, String> send(MinecraftConnection backend, Packet packet) {
         if (!backend.getChannel().isActive()) {
             return unavailable("Automation is not in an active game connection.");
         }
         backend.sendPacket(packet);
-        return ProxyResult.success();
+        return new Result.Success<>(null);
     }
 
-    private static ProxyResult<Void> unavailable(String message) {
-        return ProxyResult.failure(new ProxyError("automation_unavailable", message));
+    private static Result<Void, String> unavailable(String message) {
+        return new Result.Failure<>(message);
     }
 
     @Override
