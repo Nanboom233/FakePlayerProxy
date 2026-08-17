@@ -1,9 +1,11 @@
 package com.fakeplayerproxy.automation;
 
+import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertNotSame;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.Mockito.mock;
@@ -52,7 +54,7 @@ final class AutomationManagerTest {
         assertNotNull(oldService);
         assertNotNull(freshService);
         assertNotSame(oldService, freshService);
-        assertFalse(oldService.shadow());
+        assertFalse(oldService.shadow().join());
         assertNull(manager.get(oldPlayer));
         verify(oldBackend).close();
     }
@@ -62,9 +64,26 @@ final class AutomationManagerTest {
         ConnectedPlayer player = player(UUID.randomUUID(), true);
         manager.register(player).join();
 
-        assertFalse(manager.get(player).automationService().shadow());
+        assertFalse(manager.get(player).automationService().shadow().join());
 
         verify(player, never()).disconnect(any());
+    }
+
+    @Test
+    void nameLookupIsCaseInsensitiveAndExcludesInactivePlayers() {
+        ConnectedPlayer player = player(UUID.randomUUID(), true);
+        when(player.getUsername()).thenReturn("ShadowPlayer");
+        manager.register(player).join();
+
+        assertSame(manager.get(player), manager.getByName("shadowplayer"));
+        assertEquals(java.util.List.of("ShadowPlayer"), manager.names());
+
+        MinecraftConnection backend = player
+                .getConnectionInFlightOrConnectedServer()
+                .getConnection();
+        when(backend.getChannel().isActive()).thenReturn(false);
+        assertNull(manager.getByName("ShadowPlayer"));
+        assertEquals(java.util.List.of(), manager.names());
     }
 
     private static ConnectedPlayer player(UUID uuid, boolean backendActive) {

@@ -1,14 +1,12 @@
 package com.fakeplayerproxy;
 
 import com.fakeplayerproxy.automation.AutomationManager;
-import com.fakeplayerproxy.protocol.ProtocolTarget;
 import com.fakeplayerproxy.command.FppCommand;
 import com.fakeplayerproxy.command.PlayerCommand;
-import com.fakeplayerproxy.config.ProxyConfig;
-import com.fakeplayerproxy.config.ProxyConfigLoader;
-import com.fakeplayerproxy.util.ProxyResult;
+import com.fakeplayerproxy.config.PermissionProvider;
 import com.fakeplayerproxy.world.data.Decoder;
 import com.google.inject.Inject;
+import com.velocitypowered.api.command.BrigadierCommand;
 import com.velocitypowered.api.command.CommandManager;
 import com.velocitypowered.api.command.CommandMeta;
 import com.velocitypowered.api.event.EventTask;
@@ -29,10 +27,16 @@ import com.velocitypowered.api.proxy.ProxyServer;
 import com.velocitypowered.proxy.connection.MinecraftConnection;
 
 import java.nio.file.Path;
+import java.text.MessageFormat;
+import java.util.Locale;
+import java.util.ResourceBundle;
 import java.util.function.BiConsumer;
 
+import net.kyori.adventure.key.Key;
 import net.kyori.adventure.text.Component;
 import net.kyori.adventure.text.format.NamedTextColor;
+import net.kyori.adventure.translation.GlobalTranslator;
+import net.kyori.adventure.translation.TranslationStore;
 import org.geysermc.mcprotocollib.protocol.packet.common.clientbound.ClientboundKeepAlivePacket;
 import org.geysermc.mcprotocollib.protocol.packet.common.clientbound.ClientboundPingPacket;
 import org.geysermc.mcprotocollib.protocol.packet.common.clientbound.ClientboundStoreCookiePacket;
@@ -97,51 +101,55 @@ import org.slf4j.Logger;
         description = "FakePlayerProxy runtime for a Velocity-based fake player proxy.",
         authors = {"FakePlayerProxy"})
 public final class FakePlayerProxyPlugin {
+    private static final String TRANSLATION_BUNDLE = "com.fakeplayerproxy.i18n.messages";
+
     private final ProxyServer server;
     private final Logger logger;
-    private final Path dataDirectory;
     private final AutomationManager automationManager;
+    private final PermissionProvider permissionProvider;
+    private final TranslationStore.StringBased<MessageFormat> translations;
 
     @Inject
     public FakePlayerProxyPlugin(ProxyServer server, Logger logger, @DataDirectory Path dataDirectory) {
         this.server = server;
         this.logger = logger;
-        this.dataDirectory = dataDirectory;
         this.automationManager = new AutomationManager(logger);
+        this.permissionProvider = new PermissionProvider(dataDirectory);
+        this.translations = TranslationStore.messageFormat(Key.key("fakeplayerproxy", "translations"));
     }
 
     @Subscribe
     public void onProxyInitialize(ProxyInitializeEvent event) {
-        ProxyConfigLoader configLoader = new ProxyConfigLoader();
-        ProxyResult<Path> configFile = configLoader.ensureConfigFile(dataDirectory);
-        if (!configFile.isSuccess()) {
-            logger.warn(configFile.errorOrThrow().safeMessage());
-        }
+        translations.defaultLocale(Locale.US);
+        translations.registerAll(Locale.US,
+                ResourceBundle.getBundle(TRANSLATION_BUNDLE, Locale.US), true);
+        translations.registerAll(Locale.SIMPLIFIED_CHINESE,
+                ResourceBundle.getBundle(TRANSLATION_BUNDLE, Locale.SIMPLIFIED_CHINESE), true);
+        GlobalTranslator.translator().addSource(translations);
 
-        ProxyResult<ProxyConfig> loadedConfig = configLoader.load(dataDirectory);
-        ProxyConfig proxyConfig;
-        if (loadedConfig.isSuccess()) {
-            proxyConfig = loadedConfig.valueOrThrow();
-        } else {
-            logger.warn("{} Falling back to built-in default settings.",
-                    loadedConfig.errorOrThrow().safeMessage());
-            proxyConfig = ProxyConfig.DEFAULT;
+        server.getEventManager().register(this, permissionProvider);
+        var loadedOperators = permissionProvider.load();
+        if (!loadedOperators.isSuccess()) {
+            logger.warn("Cannot load FakePlayerProxy operators; player access remains denied: {}",
+                    loadedOperators.errorOrThrow().safeMessage());
         }
 
         CommandManager commandManager = server.getCommandManager();
-        PlayerCommand playerCommandHandler = new PlayerCommand(automationManager);
-        CommandMeta fppMeta = commandManager.metaBuilder("fpp").plugin(this).build();
-        commandManager.register(fppMeta, new FppCommand(proxyConfig, automationManager, playerCommandHandler));
-        CommandMeta playerMeta = commandManager.metaBuilder("player").plugin(this).build();
-        commandManager.register(playerMeta, playerCommandHandler);
+        BrigadierCommand fppCommand = new FppCommand(server, permissionProvider, logger).create();
+        CommandMeta fppMeta = commandManager.metaBuilder(fppCommand).plugin(this).build();
+        commandManager.register(fppMeta, fppCommand);
+        BrigadierCommand playerCommand = new PlayerCommand(automationManager).create();
+        CommandMeta playerMeta = commandManager.metaBuilder(playerCommand).plugin(this).build();
+        commandManager.register(playerMeta, playerCommand);
 
-        logger.info("FakePlayerProxy loaded. Protocol target: {}. Default target: {}",
-                ProtocolTarget.displayName(), proxyConfig.targetLabel());
+        logger.info("FakePlayerProxy loaded.");
     }
 
     @Subscribe
     public void onProxyShutdown(ProxyShutdownEvent event) {
         automationManager.shutdown();
+        permissionProvider.close();
+        GlobalTranslator.translator().removeSource(translations);
     }
 
     @Subscribe

@@ -14,6 +14,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Objects;
 import java.util.Set;
+import java.util.concurrent.CompletableFuture;
 
 import org.geysermc.mcprotocollib.network.packet.Packet;
 import org.geysermc.mcprotocollib.protocol.data.game.KnownPack;
@@ -57,6 +58,7 @@ public final class AutomationService {
     private List<KnownPack> selectedKnownPacks = List.of();
     @Getter
     private boolean shadow;
+    @Getter
     private boolean closed;
 
     public AutomationService(Player owner) {
@@ -213,32 +215,34 @@ public final class AutomationService {
         }
     }
 
-    public boolean shadow() {
+    public CompletableFuture<Boolean> shadow() {
         // IDEA reports the borrowed EventLoop as unclosed. Velocity owns its lifecycle.
         //noinspection resource
         var eventLoop = owner.eventLoop();
         if (!eventLoop.inEventLoop()) {
-            eventLoop.execute(() -> {
-                if (!shadow()) {
-                    owner.velocityPlayer().sendMessage(Component.translatable(
-                            "fakeplayerproxy.command.automation_unavailable"));
+            CompletableFuture<Boolean> result = new CompletableFuture<>();
+            eventLoop.execute(() -> shadow().whenComplete((enabled, failure) -> {
+                if (failure == null) {
+                    result.complete(enabled);
+                } else {
+                    result.completeExceptionally(failure);
                 }
-            });
-            return true;
+            }));
+            return result;
         }
         MinecraftConnection backend = owner.backendConnection();
         if (shadow || closed || backend == null) {
-            return false;
+            return CompletableFuture.completedFuture(false);
         }
         var unavailableReason = owner.world().automationUnavailableReason();
         if (unavailableReason.isPresent()) {
-            return false;
+            return CompletableFuture.completedFuture(false);
         }
         shadow = true;
         owner.prepareShadow(backend);
         owner.velocityPlayer().disconnect(Component.translatable(
                 "fakeplayerproxy.disconnect.shadow"));
-        return true;
+        return CompletableFuture.completedFuture(true);
     }
 
     public ProxyResult<Void> stopActions() {

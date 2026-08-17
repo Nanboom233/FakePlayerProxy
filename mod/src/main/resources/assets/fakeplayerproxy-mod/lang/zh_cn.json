@@ -15,6 +15,12 @@
   "fakeplayerproxy.disconnect.shadow": "该玩家已进入 shadow 状态。",
   "fakeplayerproxy.command.player_required": "只有玩家可以使用此命令。",
   "fakeplayerproxy.command.automation_unavailable": "当前连接不能使用 Automation。",
+  "fakeplayerproxy.command.target_unavailable": "该自动化玩家已不再处于活动状态。",
   "fakeplayerproxy.command.shadow_unavailable": "backend connection 未激活，无法设置 shadow state。",
+  "fakeplayerproxy.command.operator_player_unavailable": "该玩家未通过已认证的在线模式档案连接。",
+  "fakeplayerproxy.command.operator_added": "%s 现已成为 FakePlayerProxy 管理员。",
+  "fakeplayerproxy.command.operator_removed": "%s 已不再是 FakePlayerProxy 管理员。",
+  "fakeplayerproxy.command.operator_not_found": "没有找到使用该名称保存的 FakePlayerProxy 管理员。",
+  "fakeplayerproxy.command.operator_update_failed": "无法更新 FakePlayerProxy 管理员配置，请查看代理日志。",
   "fakeplayerproxy.message.encryption_verified": "[FakePlayerProxy] AES 加密/解密验证成功。"
 }

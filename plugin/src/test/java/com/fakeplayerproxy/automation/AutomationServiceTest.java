@@ -94,7 +94,7 @@ final class AutomationServiceTest {
         service.enterGame();
 
         assertEquals(List.of(core), selected.getKnownPacks());
-        assertTrue(service.shadow());
+        assertTrue(service.shadow().join());
     }
 
     @Test
@@ -113,7 +113,7 @@ final class AutomationServiceTest {
         service.enterGame();
 
         assertTrue(selected.getKnownPacks().isEmpty());
-        assertFalse(service.shadow());
+        assertFalse(service.shadow().join());
         assertFalse(service.isShadow());
     }
 
@@ -156,7 +156,7 @@ final class AutomationServiceTest {
         player.initializeGame(17, spawnInfo());
         service.enterGame();
 
-        assertFalse(service.shadow());
+        assertFalse(service.shadow().join());
         assertFalse(service.isShadow());
     }
 
@@ -189,7 +189,7 @@ final class AutomationServiceTest {
 
     @Test
     void shadowKeepsProtocolAliveAndTicks() {
-        assertTrue(service.shadow());
+        assertTrue(service.shadow().join());
 
         service.keepAlive(backend, 42L);
         service.tick(backend);

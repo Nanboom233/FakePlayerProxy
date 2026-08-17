@@ -105,6 +105,27 @@ public final class AutomationManager {
         return players.get(player);
     }
 
+    public Player getByName(String name) {
+        Objects.requireNonNull(name, "name");
+        return players.values().stream()
+                .filter(AutomationManager::isActive)
+                .filter(player -> player.velocityPlayer().getUsername().equalsIgnoreCase(name))
+                .findFirst()
+                .orElse(null);
+    }
+
+    public List<String> names() {
+        return players.values().stream()
+                .filter(AutomationManager::isActive)
+                .map(player -> player.velocityPlayer().getUsername())
+                .sorted(String.CASE_INSENSITIVE_ORDER)
+                .toList();
+    }
+
+    private static boolean isActive(Player player) {
+        return !player.automationService().isClosed() && player.backendConnection() != null;
+    }
+
     public ProxyResult<Void> closeBackend(com.velocitypowered.api.proxy.Player velocityPlayer) {
         Player player = players.get(velocityPlayer);
         if (player == null) {

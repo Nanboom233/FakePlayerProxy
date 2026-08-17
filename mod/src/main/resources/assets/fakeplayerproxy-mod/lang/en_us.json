@@ -15,6 +15,12 @@
   "fakeplayerproxy.disconnect.shadow": "This player is now in shadow state.",
   "fakeplayerproxy.command.player_required": "Only a player can use this command.",
   "fakeplayerproxy.command.automation_unavailable": "Automation is not available for this connection.",
+  "fakeplayerproxy.command.target_unavailable": "That automation player is no longer active.",
   "fakeplayerproxy.command.shadow_unavailable": "Cannot enable shadow because the backend connection is not active.",
+  "fakeplayerproxy.command.operator_player_unavailable": "That player is not online with an authenticated profile.",
+  "fakeplayerproxy.command.operator_added": "%s is now a FakePlayerProxy operator.",
+  "fakeplayerproxy.command.operator_removed": "%s is no longer a FakePlayerProxy operator.",
+  "fakeplayerproxy.command.operator_not_found": "No saved FakePlayerProxy operator has that name.",
+  "fakeplayerproxy.command.operator_update_failed": "Could not update the FakePlayerProxy operator configuration. Check the proxy log.",
   "fakeplayerproxy.message.encryption_verified": "[FakePlayerProxy] AES encryption/decryption verified."
 }
