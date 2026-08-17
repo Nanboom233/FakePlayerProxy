@@ -263,3 +263,26 @@ Added the Cloth Config consent editor, optional Mod Menu entrypoint, filtered bl
 ### Status
 
 [OK] **Completed**
+
+
+## Session 8: Player as action command and operator permissions
+
+**Date**: 2026-08-17
+**Task**: Player as action command and operator permissions
+**Branch**: `master`
+
+### Summary
+
+Converted player and fpp commands to Brigadier, added ops.json-backed permissions, fixed live command refresh and proxy interception, registered server translations, removed deprecated configuration code, and consolidated Velocity changes into patch 0002.
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `a39c200` | (see git log) |
+| `d33c3a9` | (see git log) |
+| `75648c2` | (see git log) |
+
+### Status
+
+[OK] **Completed**

@@ -8,8 +8,8 @@
 
 <!-- @@@auto:current-status -->
 - **Active File**: `journal-1.md`
-- **Total Sessions**: 7
-- **Last Active**: 2026-08-16
+- **Total Sessions**: 8
+- **Last Active**: 2026-08-17
 <!-- @@@/auto:current-status -->
 
 ---
@@ -19,7 +19,7 @@
 <!-- @@@auto:active-documents -->
 | File | Lines | Status |
 |------|-------|--------|
-| `journal-1.md` | ~265 | Active |
+| `journal-1.md` | ~288 | Active |
 <!-- @@@/auto:active-documents -->
 
 ---
@@ -29,6 +29,7 @@
 <!-- @@@auto:session-history -->
 | # | Date | Title | Commits | Branch |
 |---|------|-------|---------|--------|
+| 8 | 2026-08-17 | Player as action command and operator permissions | `a39c200`, `d33c3a9`, `75648c2` | `master` |
 | 7 | 2026-08-16 | Cloth Config consent settings | `d922dff`, `42316e8` | `master` |
 | 6 | 2026-08-16 | Automation Shadow infrastructure | `a58e72b`, `0eef08f`, `d182af5`, `b6301b5` | `master` |
 | 5 | 2026-08-15 | Known Packs registry recovery and movement failure triage | - | `master` |
