@@ -1,0 +1,5 @@
+{"file": ".trellis/spec/backend/velocity-plugin.md", "reason": "Checks command, lifecycle, event-loop, and Velocity patch contracts."}
+{"file": ".trellis/spec/language/java.md", "reason": "Checks Java structure, error, annotation, and message conventions."}
+{"file": ".trellis/spec/tooling/tool-selection.md", "reason": "Checks project tool ownership and validation rules."}
+{"file": ".trellis/tasks/08-16-player-as-action-command/research/velocity-permissions.md", "reason": "Checks the implementation against verified permission and forwarding behavior."}
+{"file": ".trellis/tasks/08-16-player-as-action-command/research/permission-command-refresh-and-console-i18n.md", "reason": "Verify command refresh and translation behavior"}
