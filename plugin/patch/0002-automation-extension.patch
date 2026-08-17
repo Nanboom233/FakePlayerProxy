@@ -1,5 +1,5 @@
 diff --git a/api/build.gradle.kts b/api/build.gradle.kts
-index 0e3304f6b1dce5c092e350543dced79837cda854..5048575e477ef7dcfedc7fb81e7ddc4b4ccdeae7 100644
+index 0e3304f6..5048575e 100644
 --- a/api/build.gradle.kts
 +++ b/api/build.gradle.kts
 @@ -1,84 +1,85 @@
@@ -88,12 +88,12 @@ index 0e3304f6b1dce5c092e350543dced79837cda854..5048575e477ef7dcfedc7fb81e7ddc4b
          o.addStringOption("Xdoclint:none", "-quiet")
      }
  }
-diff --git a/api/src/main/java/com/velocitypowered/api/event/connection/ServerboundPacketEvent.java b/api/src/main/java/com/velocitypowered/api/event/connection/ServerboundPacketEvent.java
+diff --git a/api/src/main/java/com/velocitypowered/api/event/connection/ClientboundPacketEvent.java b/api/src/main/java/com/velocitypowered/api/event/connection/ClientboundPacketEvent.java
 new file mode 100644
-index 0000000000000000000000000000000000000000..471fa268752ae850c1cd1444f9088f4c8355d417
+index 00000000..e4dfde6b
 --- /dev/null
-+++ b/api/src/main/java/com/velocitypowered/api/event/connection/ServerboundPacketEvent.java
-@@ -0,0 +1,54 @@
++++ b/api/src/main/java/com/velocitypowered/api/event/connection/ClientboundPacketEvent.java
+@@ -0,0 +1,45 @@
 +/*
 + * Copyright (C) 2018-2026 Velocity Contributors
 + *
@@ -108,21 +108,20 @@ index 0000000000000000000000000000000000000000..471fa268752ae850c1cd1444f9088f4c
 +import com.velocitypowered.api.proxy.Player;
 +import org.geysermc.mcprotocollib.network.packet.Packet;
 +
-+/** A synchronous event for one packet received from a player. */
-+public final class ServerboundPacketEvent<T extends Packet> {
++/** A synchronous event for one packet received from a backend server. */
++public final class ClientboundPacketEvent<T extends Packet> {
 +  private final Player player;
 +  private final Class<T> packetType;
 +  private T packet;
-+  private boolean cancelled;
 +
 +  /**
-+   * Creates a serverbound packet event.
++   * Creates a clientbound packet event.
 +   *
-+   * @param player the sending player
++   * @param player the receiving player
 +   * @param packetType the registered packet type
 +   * @param packet the decoded packet
 +   */
-+  public ServerboundPacketEvent(Player player, Class<T> packetType, T packet) {
++  public ClientboundPacketEvent(Player player, Class<T> packetType, T packet) {
 +    this.player = requireNonNull(player, "player");
 +    this.packetType = requireNonNull(packetType, "packetType");
 +    this.packet = requireNonNull(packet, "packet");
@@ -139,17 +138,9 @@ index 0000000000000000000000000000000000000000..471fa268752ae850c1cd1444f9088f4c
 +  public void setPacket(T packet) {
 +    this.packet = packetType.cast(requireNonNull(packet, "packet"));
 +  }
-+
-+  public void cancel() {
-+    cancelled = true;
-+  }
-+
-+  public boolean isCancelled() {
-+    return cancelled;
-+  }
 +}
 diff --git a/api/src/main/java/com/velocitypowered/api/event/connection/DisconnectEvent.java b/api/src/main/java/com/velocitypowered/api/event/connection/DisconnectEvent.java
-index bec7b74562702ca55bf6a92cfc3d1c0810fbca09..59130e477d663f4b6ee3481bdb21f0b5952d92a3 100644
+index bec7b745..59130e47 100644
 --- a/api/src/main/java/com/velocitypowered/api/event/connection/DisconnectEvent.java
 +++ b/api/src/main/java/com/velocitypowered/api/event/connection/DisconnectEvent.java
 @@ -1,66 +1,76 @@
@@ -229,12 +220,12 @@ index bec7b74562702ca55bf6a92cfc3d1c0810fbca09..59130e477d663f4b6ee3481bdb21f0b5
      PRE_SERVER_JOIN
    }
  }
-diff --git a/api/src/main/java/com/velocitypowered/api/event/connection/ClientboundPacketEvent.java b/api/src/main/java/com/velocitypowered/api/event/connection/ClientboundPacketEvent.java
+diff --git a/api/src/main/java/com/velocitypowered/api/event/connection/ServerboundPacketEvent.java b/api/src/main/java/com/velocitypowered/api/event/connection/ServerboundPacketEvent.java
 new file mode 100644
-index 0000000000000000000000000000000000000000..2d1911acd36ec4ab668361a2eebb8f62b65faf23
+index 00000000..c51d2d3f
 --- /dev/null
-+++ b/api/src/main/java/com/velocitypowered/api/event/connection/ClientboundPacketEvent.java
-@@ -0,0 +1,45 @@
++++ b/api/src/main/java/com/velocitypowered/api/event/connection/ServerboundPacketEvent.java
+@@ -0,0 +1,54 @@
 +/*
 + * Copyright (C) 2018-2026 Velocity Contributors
 + *
@@ -249,20 +240,21 @@ index 0000000000000000000000000000000000000000..2d1911acd36ec4ab668361a2eebb8f62
 +import com.velocitypowered.api.proxy.Player;
 +import org.geysermc.mcprotocollib.network.packet.Packet;
 +
-+/** A synchronous event for one packet received from a backend server. */
-+public final class ClientboundPacketEvent<T extends Packet> {
++/** A synchronous event for one packet received from a player. */
++public final class ServerboundPacketEvent<T extends Packet> {
 +  private final Player player;
 +  private final Class<T> packetType;
 +  private T packet;
++  private boolean cancelled;
 +
 +  /**
-+   * Creates a clientbound packet event.
++   * Creates a serverbound packet event.
 +   *
-+   * @param player the receiving player
++   * @param player the sending player
 +   * @param packetType the registered packet type
 +   * @param packet the decoded packet
 +   */
-+  public ClientboundPacketEvent(Player player, Class<T> packetType, T packet) {
++  public ServerboundPacketEvent(Player player, Class<T> packetType, T packet) {
 +    this.player = requireNonNull(player, "player");
 +    this.packetType = requireNonNull(packetType, "packetType");
 +    this.packet = requireNonNull(packet, "packet");
@@ -279,9 +271,273 @@ index 0000000000000000000000000000000000000000..2d1911acd36ec4ab668361a2eebb8f62
 +  public void setPacket(T packet) {
 +    this.packet = packetType.cast(requireNonNull(packet, "packet"));
 +  }
++
++  public void cancel() {
++    cancelled = true;
++  }
++
++  public boolean isCancelled() {
++    return cancelled;
++  }
++}
+diff --git a/api/src/main/java/com/velocitypowered/api/proxy/Player.java b/api/src/main/java/com/velocitypowered/api/proxy/Player.java
+index c4b8703f..171f7ea2 100644
+--- a/api/src/main/java/com/velocitypowered/api/proxy/Player.java
++++ b/api/src/main/java/com/velocitypowered/api/proxy/Player.java
+@@ -129,160 +129,167 @@ public interface Player extends
+   /**
+    * Creates a new connection request so that the player can connect to another server.
+    *
+    * @param server the server to connect to
+    * @return a new connection request
+    */
+   ConnectionRequestBuilder createConnectionRequest(RegisteredServer server);
+ 
+   /**
+    * Gets the player's profile properties.
+    *
+    * <p>The returned list may be unmodifiable.</p>
+    *
+    * @return the player's profile properties
+    */
+   List<GameProfile.Property> getGameProfileProperties();
+ 
+   /**
+    * Sets the player's profile properties.
+    *
+    * @param properties the properties
+    */
+   void setGameProfileProperties(List<GameProfile.Property> properties);
+ 
+   /**
+    * Returns the player's game profile.
+    */
+   GameProfile getGameProfile();
+ 
+   /**
+    * Clears the tab list header and footer for the player.
+    *
+    * @deprecated Use {@link Player#clearPlayerListHeaderAndFooter()}.
+    */
+   @Deprecated
+   default void clearHeaderAndFooter() {
+     clearPlayerListHeaderAndFooter();
+   }
+ 
+   /**
+    * Clears the player list header and footer.
+    */
+   void clearPlayerListHeaderAndFooter();
+ 
+   /**
+    * Returns the player's player list header.
+    *
+    * @return this player's player list header
+    */
+   Component getPlayerListHeader();
+ 
+   /**
+    * Returns the player's player list footer.
+    *
+    * @return this player's tab list
+    */
+   Component getPlayerListFooter();
+ 
+   /**
+    * Returns the player's tab list.
+    *
+    * @return this player's tab list
+    */
+   TabList getTabList();
+ 
+   /**
+    * Disconnects the player with the specified reason. Once this method is called, further calls to
+    * other {@link Player} methods will become undefined.
+    *
+    * @param reason component with the reason
+    */
+   void disconnect(@NotNull Component reason);
+ 
+   /**
+    * Sends chat input onto the players current server as if they typed it into the client chat box.
+    *
+    * @param input the chat input to send
+    */
+   void spoofChatInput(String input);
+ 
++  /**
++   * Rebuilds and resends the command tree advertised to this player.
++   *
++   * <p>If the player has no active backend command tree, this method has no effect.</p>
++   */
++  void refreshCommands();
++
+   /**
+    * Sends the specified resource pack from {@code url} to the user. If at all possible, send the
+    * resource pack using {@link #sendResourcePack(String, byte[])}. To monitor the status of the
+    * sent resource pack, subscribe to {@link PlayerResourcePackStatusEvent}.
+    *
+    * @param url the URL for the resource pack
+    * @deprecated Use {@link #sendResourcePackOffer(ResourcePackInfo)} instead
+    */
+   @Deprecated
+   void sendResourcePack(String url);
+ 
+   /**
+    * Sends the specified resource pack from {@code url} to the user, using the specified 20-byte
+    * SHA-1 hash. To monitor the status of the sent resource pack, subscribe to
+    * {@link PlayerResourcePackStatusEvent}.
+    *
+    * @param url the URL for the resource pack
+    * @param hash the SHA-1 hash value for the resource pack
+    * @deprecated Use {@link #sendResourcePackOffer(ResourcePackInfo)} instead
+    */
+   @Deprecated
+   void sendResourcePack(String url, byte[] hash);
+ 
+   /**
+    * Queues and sends a new Resource-pack offer to the player.
+    * To monitor the status of the sent resource pack, subscribe to
+    * {@link PlayerResourcePackStatusEvent}.
+    * To create a {@link ResourcePackInfo} use the
+    * {@link ProxyServer#createResourcePackBuilder(String)} builder.
+    *
+    * @param packInfo the resource-pack in question
+    */
+   void sendResourcePackOffer(ResourcePackInfo packInfo);
+ 
+   /**
+    * Gets the {@link ResourcePackInfo} of the currently applied
+    * resource-pack or null if none.
+    *
+    * <p> Note that since 1.20.3 it is no longer recommended to use
+    * this method as it will only return the last applied
+    * resource pack. To get all applied resource packs, use
+    * {@link #getAppliedResourcePacks()} instead. </p>
+    *
+    * @return the applied resource pack or null if none.
+    */
+   @Nullable
+   @Deprecated
+   ResourcePackInfo getAppliedResourcePack();
+ 
+   /**
+    * Gets the {@link ResourcePackInfo} of the resource pack
+    * the user is currently downloading or is currently
+    * prompted to install or null if none.
+    *
+    * <p> Note that since 1.20.3 it is no longer recommended to use
+    * this method as it will only return the last pending
+    * resource pack. To get all pending resource packs, use
+    * {@link #getPendingResourcePacks()} instead. </p>
+    *
+    * @return the pending resource pack or null if none
+    */
+   @Nullable
+   @Deprecated
+   ResourcePackInfo getPendingResourcePack();
+ 
+   /**
+    * Gets the {@link ResourcePackInfo} of the currently applied
+    * resource-packs.
+    *
+    * @return collection of the applied resource packs.
+    */
+   @NotNull Collection<ResourcePackInfo> getAppliedResourcePacks();
+ 
+   /**
+    * Gets the {@link ResourcePackInfo} of the resource packs
+    * the user is currently downloading or is currently
+    * prompted to install.
+    *
+    * @return collection of the pending resource packs
+    */
+@@ -455,81 +462,81 @@ public interface Player extends
+    * <b>This method is not currently implemented in Velocity
+    * and will not perform any actions.</b>
+    *
+    * @see <a href="https://docs.papermc.io/velocity/dev/pitfalls/#audience-operations-are-not-fully-supported">
+    *   Unsupported Adventure Operations</a>
+    */
+   @Override
+   default void openBook(@NotNull Book book) {
+   }
+ 
+   /**
+    * {@inheritDoc}
+    *
+    * <b>This method is not currently implemented in Velocity
+    * and will not perform any actions.</b>
+    *
+    * @see <a href="https://docs.papermc.io/velocity/dev/pitfalls/#audience-operations-are-not-fully-supported">
+    *   Unsupported Adventure Operations</a>
+    */
+   @Override
+   default void showDialog(@NotNull DialogLike dialog) {
+   }
+ 
+   /**
+    * {@inheritDoc}
+    *
+    * <b>This method is not currently implemented in Velocity
+    * and will not perform any actions.</b>
+    *
+    * @see <a href="https://docs.papermc.io/velocity/dev/pitfalls/#audience-operations-are-not-fully-supported">
+    *   Unsupported Adventure Operations</a>
+    */
+   @Override
+   default void closeDialog() {
+   }
+ 
+   /**
+    * Transfers a Player to a host.
+    *
+    * @param address the host address
+    * @throws IllegalArgumentException if the player is from a version lower than 1.20.5
+    * @since 3.3.0
+    */
+   void transferToHost(@NotNull InetSocketAddress address);
+ 
+   /**
+    * Stores a cookie with arbitrary data on the player's client.
+    *
+    * @param key the identifier of the cookie
+    * @param data the data of the cookie
+    * @throws IllegalArgumentException if the player is from a version lower than 1.20.5
+    * @since 3.3.0
+    * @sinceMinecraft 1.20.5
+    */
+   void storeCookie(Key key, byte[] data);
+ 
+   /**
+    * Requests a previously stored cookie from the player's client.
+    * Calling this method causes the client to send the cookie to the proxy.
+    * To retrieve the actual data of the requested cookie, you have to use the
+    * {@link CookieReceiveEvent}.
+    *
+    * @param key the identifier of the cookie
+    * @throws IllegalArgumentException if the player is from a version lower than 1.20.5
+    * @since 3.3.0
+    * @sinceMinecraft 1.20.5
+    */
+   void requestCookie(Key key);
+ 
+   /**
+    * Send the player a list of custom links to display in their client's pause menu.
+    *
+    * <p>Note that later packets sent by the backend server may override links sent by the proxy.
+    *
+    * @param links an ordered list of {@link ServerLink}s to send to the player
+    * @throws IllegalArgumentException if the player is from a version lower than 1.21
+    * @since 3.3.0
+    * @sinceMinecraft 1.21
+    */
+   void setServerLinks(@NotNull List<ServerLink> links);
+-}
+\ No newline at end of file
 +}
 diff --git a/proxy/build.gradle.kts b/proxy/build.gradle.kts
-index e6d48392808baf81e93c86c104117f9c1d868161..db1416bdab69855ab4862c4dd772ef802525679f 100644
+index e6d48392..db1416bd 100644
 --- a/proxy/build.gradle.kts
 +++ b/proxy/build.gradle.kts
 @@ -1,174 +1,173 @@
@@ -461,8 +717,219 @@ index e6d48392808baf81e93c86c104117f9c1d868161..db1416bdab69855ab4862c4dd772ef80
      annotationProcessor(libs.auto.service)
      annotationProcessor(libs.log4j.core)
  }
+diff --git a/proxy/src/main/java/com/velocitypowered/proxy/command/CommandGraphInjector.java b/proxy/src/main/java/com/velocitypowered/proxy/command/CommandGraphInjector.java
+index 848d76d1..ce8c4b55 100644
+--- a/proxy/src/main/java/com/velocitypowered/proxy/command/CommandGraphInjector.java
++++ b/proxy/src/main/java/com/velocitypowered/proxy/command/CommandGraphInjector.java
+@@ -1,147 +1,206 @@
+ /*
+  * Copyright (C) 2021-2023 Velocity Contributors
+  *
+  * This program is free software: you can redistribute it and/or modify
+  * it under the terms of the GNU General Public License as published by
+  * the Free Software Foundation, either version 3 of the License, or
+  * (at your option) any later version.
+  *
+  * This program is distributed in the hope that it will be useful,
+  * but WITHOUT ANY WARRANTY; without even the implied warranty of
+  * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+  * GNU General Public License for more details.
+  *
+  * You should have received a copy of the GNU General Public License
+  * along with this program.  If not, see <https://www.gnu.org/licenses/>.
+  */
+ 
+ package com.velocitypowered.proxy.command;
+ 
+ import com.google.common.base.Preconditions;
+ import com.mojang.brigadier.CommandDispatcher;
+ import com.mojang.brigadier.StringReader;
+ import com.mojang.brigadier.builder.ArgumentBuilder;
+ import com.mojang.brigadier.context.CommandContextBuilder;
+ import com.mojang.brigadier.context.StringRange;
+ import com.mojang.brigadier.tree.CommandNode;
+ import com.mojang.brigadier.tree.LiteralCommandNode;
+ import com.mojang.brigadier.tree.RootCommandNode;
+ import com.velocitypowered.proxy.command.brigadier.VelocityArgumentCommandNode;
++import java.util.ArrayDeque;
++import java.util.Collections;
+ import java.util.IdentityHashMap;
+ import java.util.Map;
++import java.util.Set;
+ import java.util.concurrent.locks.Lock;
+ import org.checkerframework.checker.lock.qual.GuardedBy;
+ import org.checkerframework.checker.nullness.qual.Nullable;
+ 
+ /**
+  * Copies the nodes of a {@link RootCommandNode} to a possibly non-empty destination
+  * {@link RootCommandNode}, respecting the requirements satisfied by a given command source.
+  *
+  * @param <S> the type of the source to inject the nodes for
+  */
+ public final class CommandGraphInjector<S> {
+ 
+   private static final StringRange ALIAS_RANGE = StringRange.at(0);
+   private static final StringReader ALIAS_READER = new StringReader("");
+ 
+   private final @GuardedBy("lock") CommandDispatcher<S> dispatcher;
+   private final Lock lock;
+ 
+   CommandGraphInjector(final CommandDispatcher<S> dispatcher, final Lock lock) {
+     this.dispatcher = Preconditions.checkNotNull(dispatcher, "dispatcher");
+     this.lock = Preconditions.checkNotNull(lock, "lock");
+   }
+ 
+   // The term "source" is ambiguous here. We use "origin" when referring to
+   // the root node we are copying nodes from to the destination node.
+ 
+   /**
+    * Adds the node from the root node of this injector to the given root node, respecting the
+    * requirements satisfied by the given source.
+    *
+    * <p>Prior to adding a literal with the same name as one previously contained
+    * in the destination node, the old node is removed from the destination node.
+    *
+    * @param dest   the root node to add the permissible nodes to
+    * @param source the command source to inject the nodes for
+    */
+   public void inject(final RootCommandNode<S> dest, final S source) {
+     lock.lock();
+     try {
+       final Map<CommandNode<S>, CommandNode<S>> done = new IdentityHashMap<>();
+       final RootCommandNode<S> origin = this.dispatcher.getRoot();
+       final CommandContextBuilder<S> rootContext =
+           new CommandContextBuilder<>(this.dispatcher, source, origin, 0);
+ 
+       // Filter alias nodes
+       for (final CommandNode<S> node : origin.getChildren()) {
+         if (!node.canUse(source)) {
+           continue;
+         }
+ 
+         final CommandContextBuilder<S> context = rootContext.copy()
+             .withNode(node, ALIAS_RANGE);
+         if (!node.canUse(context, ALIAS_READER)) {
+           continue;
+         }
+ 
+         final LiteralCommandNode<S> asLiteral = (LiteralCommandNode<S>) node;
+         final LiteralCommandNode<S> copy = asLiteral.createBuilder().build();
+         final VelocityArgumentCommandNode<S, ?> argsNode =
+             VelocityCommands.getArgumentsNode(asLiteral);
+         if (argsNode == null) {
+           // This literal is associated to a BrigadierCommand, filter normally.
+           this.copyChildren(node, copy, source, done);
+         } else {
+           // Copy all children nodes (arguments node and hints)
+           for (final CommandNode<S> child : node.getChildren()) {
+             copy.addChild(child);
+           }
+         }
+         this.addAlias(copy, dest);
+       }
+     } finally {
+       lock.unlock();
+     }
+   }
+ 
++  /**
++   * Deep-copies an explicit command graph into the destination.
++   *
++   * @param origin the root node to copy from
++   * @param dest the root node to copy into
++   */
++  public void copy(final RootCommandNode<S> origin, final RootCommandNode<S> dest) {
++    lock.lock();
++    try {
++      final Map<CommandNode<S>, CommandNode<S>> done = new IdentityHashMap<>();
++      done.put(origin, dest);
++      final Set<CommandNode<S>> nodes = Collections.newSetFromMap(new IdentityHashMap<>());
++      final ArrayDeque<CommandNode<S>> pending = new ArrayDeque<>();
++      pending.add(origin);
++      while (!pending.isEmpty()) {
++        final CommandNode<S> node = pending.remove();
++        if (nodes.add(node)) {
++          pending.addAll(node.getChildren());
++          if (node.getRedirect() != null) {
++            pending.add(node.getRedirect());
++          }
++        }
++      }
++      for (final CommandNode<S> node : nodes) {
++        this.copyNode(node, done, Collections.newSetFromMap(new IdentityHashMap<>()));
++      }
++      for (final CommandNode<S> node : nodes) {
++        final CommandNode<S> copy = done.get(node);
++        for (final CommandNode<S> child : node.getChildren()) {
++          copy.addChild(done.get(child));
++        }
++      }
++    } finally {
++      lock.unlock();
++    }
++  }
++
++  private CommandNode<S> copyNode(final CommandNode<S> node,
++                                  final Map<CommandNode<S>, CommandNode<S>> done,
++                                  final Set<CommandNode<S>> visiting) {
++    final CommandNode<S> existing = done.get(node);
++    if (existing != null) {
++      return existing;
++    }
++    Preconditions.checkState(visiting.add(node), "Command redirect cycle detected");
++    final ArgumentBuilder<S, ?> builder = node.createBuilder();
++    if (node.getRedirect() != null) {
++      builder.forward(this.copyNode(node.getRedirect(), done, visiting),
++          builder.getRedirectModifier(), builder.isFork());
++    }
++    final CommandNode<S> copy = builder.build();
++    done.put(node, copy);
++    visiting.remove(node);
++    return copy;
++  }
++
+   private @Nullable CommandNode<S> filterNode(final CommandNode<S> node, final S source, final Map<CommandNode<S>, CommandNode<S>> done) {
+     if (done.containsKey(node)) {
+       return done.get(node);
+     }
+     // We only check the non-context requirement when filtering alias nodes.
+     // Otherwise, we would need to manually craft context builder and reader instances,
+     // which is both incorrect and inefficient. The reason why we can do so for alias
+     // literals is due to the empty string being a valid and expected input by
+     // the context-aware requirement (when suggesting the literal name).
+     if (!node.canUse(source)) {
+       return null;
+     }
+     final ArgumentBuilder<S, ?> builder = node.createBuilder();
+     if (node.getRedirect() != null) {
+       // Redirects to non-Brigadier commands are not supported. Luckily,
+       // we don't expose the root node to API users, so they can't access
+       // nodes associated to other commands.
+       final CommandNode<S> target = this.filterNode(node.getRedirect(), source, done);
+       builder.forward(target, builder.getRedirectModifier(), builder.isFork());
+     }
+     final CommandNode<S> result = builder.build();
+     done.put(node, result);
+     this.copyChildren(node, result, source, done);
+     return result;
+   }
+ 
+   private void copyChildren(final CommandNode<S> parent, final CommandNode<S> dest, final S source, final Map<CommandNode<S>, CommandNode<S>> done) {
+     for (final CommandNode<S> child : parent.getChildren()) {
+       final CommandNode<S> filtered = this.filterNode(child, source, done);
+       if (filtered != null) {
+         dest.addChild(filtered);
+       }
+     }
+   }
+ 
+   private void addAlias(final LiteralCommandNode<S> node, final RootCommandNode<S> dest) {
+     dest.removeChildByName(node.getName());
+     dest.addChild(node);
+   }
+ }
 diff --git a/proxy/src/main/java/com/velocitypowered/proxy/connection/MinecraftConnection.java b/proxy/src/main/java/com/velocitypowered/proxy/connection/MinecraftConnection.java
-index 0cb95752aa11379c92bd648e10f941f04d836aeb..e5acc61624441da0330839ebd064dae969383940 100644
+index 0cb95752..8b53376d 100644
 --- a/proxy/src/main/java/com/velocitypowered/proxy/connection/MinecraftConnection.java
 +++ b/proxy/src/main/java/com/velocitypowered/proxy/connection/MinecraftConnection.java
 @@ -1,160 +1,166 @@
@@ -879,8 +1346,410 @@ index 0cb95752aa11379c92bd648e10f941f04d836aeb..e5acc61624441da0330839ebd064dae9
    }
  
    public boolean isClosed() {
+diff --git a/proxy/src/main/java/com/velocitypowered/proxy/connection/backend/BackendPlaySessionHandler.java b/proxy/src/main/java/com/velocitypowered/proxy/connection/backend/BackendPlaySessionHandler.java
+index dfe230e3..8370be54 100644
+--- a/proxy/src/main/java/com/velocitypowered/proxy/connection/backend/BackendPlaySessionHandler.java
++++ b/proxy/src/main/java/com/velocitypowered/proxy/connection/backend/BackendPlaySessionHandler.java
+@@ -3,179 +3,182 @@
+  *
+  * This program is free software: you can redistribute it and/or modify
+  * it under the terms of the GNU General Public License as published by
+  * the Free Software Foundation, either version 3 of the License, or
+  * (at your option) any later version.
+  *
+  * This program is distributed in the hope that it will be useful,
+  * but WITHOUT ANY WARRANTY; without even the implied warranty of
+  * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+  * GNU General Public License for more details.
+  *
+  * You should have received a copy of the GNU General Public License
+  * along with this program.  If not, see <https://www.gnu.org/licenses/>.
+  */
+ 
+ package com.velocitypowered.proxy.connection.backend;
+ 
+ import static com.velocitypowered.proxy.connection.backend.BungeeCordMessageResponder.getBungeeCordChannel;
+ 
+ import com.google.common.base.Preconditions;
+ import com.google.common.collect.ImmutableList;
+ import com.mojang.brigadier.tree.RootCommandNode;
+ import com.velocitypowered.api.command.CommandSource;
+ import com.velocitypowered.api.event.command.PlayerAvailableCommandsEvent;
+ import com.velocitypowered.api.event.connection.PluginMessageEvent;
+ import com.velocitypowered.api.event.connection.PreTransferEvent;
+ import com.velocitypowered.api.event.player.CookieRequestEvent;
+ import com.velocitypowered.api.event.player.CookieStoreEvent;
+ import com.velocitypowered.api.event.player.PlayerResourcePackStatusEvent;
+ import com.velocitypowered.api.event.player.ServerResourcePackRemoveEvent;
+ import com.velocitypowered.api.event.player.ServerResourcePackSendEvent;
+ import com.velocitypowered.api.event.proxy.ProxyPingEvent;
+ import com.velocitypowered.api.network.ProtocolVersion;
+ import com.velocitypowered.api.proxy.messages.ChannelIdentifier;
+ import com.velocitypowered.api.proxy.player.ResourcePackInfo;
+ import com.velocitypowered.proxy.VelocityServer;
+ import com.velocitypowered.proxy.command.CommandGraphInjector;
+ import com.velocitypowered.proxy.connection.MinecraftConnection;
+ import com.velocitypowered.proxy.connection.MinecraftSessionHandler;
+ import com.velocitypowered.proxy.connection.client.ClientPlaySessionHandler;
+ import com.velocitypowered.proxy.connection.client.ConnectedPlayer;
+ import com.velocitypowered.proxy.connection.player.resourcepack.VelocityResourcePackInfo;
+ import com.velocitypowered.proxy.connection.player.resourcepack.handler.ResourcePackHandler;
+ import com.velocitypowered.proxy.connection.util.ConnectionMessages;
+ import com.velocitypowered.proxy.protocol.MinecraftPacket;
+ import com.velocitypowered.proxy.protocol.StateRegistry;
+ import com.velocitypowered.proxy.protocol.netty.MinecraftDecoder;
+ import com.velocitypowered.proxy.protocol.netty.MinecraftVarintFrameDecoder;
+ import com.velocitypowered.proxy.protocol.packet.AvailableCommandsPacket;
+ import com.velocitypowered.proxy.protocol.packet.BossBarPacket;
+ import com.velocitypowered.proxy.protocol.packet.BundleDelimiterPacket;
+ import com.velocitypowered.proxy.protocol.packet.ClientSettingsPacket;
+ import com.velocitypowered.proxy.protocol.packet.ClientboundCookieRequestPacket;
+ import com.velocitypowered.proxy.protocol.packet.ClientboundStoreCookiePacket;
+ import com.velocitypowered.proxy.protocol.packet.DisconnectPacket;
+ import com.velocitypowered.proxy.protocol.packet.KeepAlivePacket;
+ import com.velocitypowered.proxy.protocol.packet.LegacyPlayerListItemPacket;
+ import com.velocitypowered.proxy.protocol.packet.PluginMessagePacket;
+ import com.velocitypowered.proxy.protocol.packet.RemovePlayerInfoPacket;
+ import com.velocitypowered.proxy.protocol.packet.RemoveResourcePackPacket;
+ import com.velocitypowered.proxy.protocol.packet.ResourcePackRequestPacket;
+ import com.velocitypowered.proxy.protocol.packet.ResourcePackResponsePacket;
+ import com.velocitypowered.proxy.protocol.packet.ServerDataPacket;
+ import com.velocitypowered.proxy.protocol.packet.TabCompleteResponsePacket;
+ import com.velocitypowered.proxy.protocol.packet.TransferPacket;
+ import com.velocitypowered.proxy.protocol.packet.UpsertPlayerInfoPacket;
+ import com.velocitypowered.proxy.protocol.packet.chat.ComponentHolder;
+ import com.velocitypowered.proxy.protocol.packet.config.StartUpdatePacket;
+ import com.velocitypowered.proxy.protocol.util.DeferredByteBufHolder;
+ import com.velocitypowered.proxy.protocol.util.PluginMessageUtil;
+ import io.netty.buffer.ByteBuf;
+ import io.netty.buffer.ByteBufUtil;
+ import io.netty.buffer.Unpooled;
+ import io.netty.channel.Channel;
+ import io.netty.handler.timeout.ReadTimeoutException;
+ import java.net.InetSocketAddress;
+ import java.util.regex.Pattern;
+ import net.kyori.adventure.key.Key;
+ import org.apache.logging.log4j.LogManager;
+ import org.apache.logging.log4j.Logger;
++import org.checkerframework.checker.nullness.qual.Nullable;
+ 
+ /**
+  * Handles a connected player.
+  */
+ public class BackendPlaySessionHandler implements MinecraftSessionHandler {
+ 
+   private static final Pattern PLAUSIBLE_SHA1_HASH = Pattern.compile("^[a-z0-9]{40}$");
+   private static final Logger logger = LogManager.getLogger(BackendPlaySessionHandler.class);
+   private static final boolean BACKPRESSURE_LOG =
+       Boolean.getBoolean("velocity.log-server-backpressure");
+   private static final int MAXIMUM_PACKETS_TO_FLUSH =
+       Integer.getInteger("velocity.max-packets-per-flush", 8192);
+   private static final int LARGE_PACKET_THRESHOLD = 1024 * 128;
+ 
+   private final VelocityServer server;
+   private final VelocityServerConnection serverConn;
+   private final ClientPlaySessionHandler playerSessionHandler;
+   private final MinecraftConnection playerConnection;
+   private final BungeeCordMessageResponder bungeecordMessageResponder;
++  private @Nullable RootCommandNode<CommandSource> backendCommandRoot;
++  private long commandTreeRevision;
+   private boolean exceptionTriggered = false;
+   private int packetsFlushed;
+ 
+   BackendPlaySessionHandler(VelocityServer server, VelocityServerConnection serverConn) {
+     this.server = server;
+     this.serverConn = serverConn;
+     this.playerConnection = serverConn.getPlayer().getConnection();
+ 
+     MinecraftSessionHandler psh = playerConnection.getActiveSessionHandler();
+     if (!(psh instanceof ClientPlaySessionHandler)) {
+       throw new IllegalStateException(
+           "Initializing BackendPlaySessionHandler with no backing client play session handler!");
+     }
+     this.playerSessionHandler = (ClientPlaySessionHandler) psh;
+ 
+     this.bungeecordMessageResponder = new BungeeCordMessageResponder(server,
+         serverConn.getPlayer());
+   }
+ 
+   @Override
+   public void activated() {
+     serverConn.getServer().addPlayer(serverConn.getPlayer());
+ 
+     MinecraftConnection serverMc = serverConn.ensureConnected();
+     if (server.getConfiguration().isBungeePluginChannelEnabled()) {
+       serverMc.write(PluginMessageUtil.constructChannelsPacket(serverMc.getProtocolVersion(),
+           ImmutableList.of(getBungeeCordChannel(serverMc.getProtocolVersion()))
+       ));
+     }
+ 
+   }
+ 
+   @Override
+   public boolean beforeHandle() {
+     if (!serverConn.isActive()) {
+       // Obsolete connection
+       serverConn.disconnect();
+       return true;
+     }
+     return false;
+   }
+ 
+   @Override
+   public boolean handle(BundleDelimiterPacket bundleDelimiterPacket) {
+     serverConn.getPlayer().getBundleHandler().toggleBundleSession();
+     return false;
+   }
+ 
+   @Override
+   public boolean handle(StartUpdatePacket packet) {
+     MinecraftConnection smc = serverConn.ensureConnected();
+     smc.setAutoReading(false);
+     // Even when not auto reading messages are still decoded. Decode them with the correct state
+     smc.getChannel().pipeline().get(MinecraftVarintFrameDecoder.class).setState(StateRegistry.CONFIG);
+     smc.getChannel().pipeline().get(MinecraftDecoder.class).setState(StateRegistry.CONFIG);
+     serverConn.getPlayer().switchToConfigState();
+     return true;
+   }
+ 
+   @Override
+   public boolean handle(KeepAlivePacket packet) {
+     serverConn.getPendingPings().put(packet.getRandomId(), System.nanoTime());
+     return false; // forwards on
+   }
+ 
+   @Override
+   public boolean handle(ClientSettingsPacket packet) {
+     serverConn.ensureConnected().write(packet);
+     return true;
+   }
+ 
+   @Override
+   public boolean handle(DisconnectPacket packet) {
+     serverConn.disconnect();
+     serverConn.getPlayer().handleConnectionException(serverConn.getServer(), packet, true);
+     return true;
+   }
+ 
+   @Override
+   public boolean handle(BossBarPacket packet) {
+@@ -281,181 +284,210 @@ public class BackendPlaySessionHandler implements MinecraftSessionHandler {
+         }
+         playerConnection.write(packet);
+       }
+     }, playerConnection.eventLoop()).exceptionally((ex) -> {
+       logger.error("Exception while handling resource pack remove for {}", playerConnection, ex);
+       return null;
+     });
+     return true;
+   }
+ 
+   @Override
+   public boolean handle(PluginMessagePacket packet) {
+     if (bungeecordMessageResponder.process(packet)) {
+       return true;
+     }
+ 
+     // Register and unregister packets are simply forwarded to the server as-is.
+     if (PluginMessageUtil.isRegister(packet) || PluginMessageUtil.isUnregister(packet)) {
+       return false;
+     }
+ 
+     if (PluginMessageUtil.isMcBrand(packet)) {
+       PluginMessagePacket rewritten = PluginMessageUtil
+               .rewriteMinecraftBrand(packet,
+                       server.getVersion(), playerConnection.getProtocolVersion());
+       playerConnection.write(rewritten);
+       return true;
+     }
+ 
+     if (serverConn.getPhase().handle(serverConn, serverConn.getPlayer(), packet)) {
+       // Handled.
+       return true;
+     }
+ 
+     ChannelIdentifier id = server.getChannelRegistrar().getFromId(packet.getChannel());
+     if (id == null) {
+       return false;
+     }
+ 
+     byte[] copy = ByteBufUtil.getBytes(packet.content());
+     PluginMessageEvent event = new PluginMessageEvent(serverConn, serverConn.getPlayer(), id, copy);
+     server.getEventManager().fire(event).thenAcceptAsync(pme -> {
+       if (pme.getResult().isAllowed() && !playerConnection.isClosed()) {
+         PluginMessagePacket copied = new PluginMessagePacket(
+                 packet.getChannel(), Unpooled.wrappedBuffer(copy));
+         playerConnection.write(copied);
+       }
+     }, playerConnection.eventLoop()).exceptionally((ex) -> {
+       logger.error("Exception while handling plugin message {}", packet, ex);
+       return null;
+     });
+     return true;
+   }
+ 
+   @Override
+   public boolean handle(TabCompleteResponsePacket packet) {
+     playerSessionHandler.handleTabCompleteResponse(packet);
+     return true;
+   }
+ 
+   @Override
+   public boolean handle(LegacyPlayerListItemPacket packet) {
+     serverConn.getPlayer().getTabList().processLegacy(packet);
+     return false;
+   }
+ 
+   @Override
+   public boolean handle(UpsertPlayerInfoPacket packet) {
+     serverConn.getPlayer().getTabList().processUpdate(packet);
+     return false;
+   }
+ 
+   @Override
+   public boolean handle(RemovePlayerInfoPacket packet) {
+     serverConn.getPlayer().getTabList().processRemove(packet);
+     return false;
+   }
+ 
+   @Override
+   public boolean handle(AvailableCommandsPacket commands) {
+-    RootCommandNode<CommandSource> rootNode = commands.getRootNode();
++    RootCommandNode<CommandSource> receivedRoot = commands.getRootNode();
++    playerConnection.eventLoop().execute(() -> {
++      if (serverConn.getPlayer().getConnectedServer() != serverConn) {
++        return;
++      }
++      backendCommandRoot = receivedRoot;
++      refreshCommands();
++    });
++    return true;
++  }
++
++  /**
++   * Rebuilds the player's advertised command tree from the latest backend tree.
++   */
++  public void refreshCommands() {
++    Preconditions.checkState(playerConnection.eventLoop().inEventLoop(),
++        "Command trees must be refreshed on the frontend connection event loop");
++    RootCommandNode<CommandSource> backendRoot = backendCommandRoot;
++    if (backendRoot == null || playerConnection.isClosed()
++        || serverConn.getPlayer().getConnectedServer() != serverConn) {
++      return;
++    }
++
++    RootCommandNode<CommandSource> rootNode = new RootCommandNode<>();
++    final CommandGraphInjector<CommandSource> injector = server.getCommandManager().getInjector();
++    injector.copy(backendRoot, rootNode);
+     if (server.getConfiguration().isAnnounceProxyCommands()) {
+       // Inject commands from the proxy.
+-      final CommandGraphInjector<CommandSource> injector = server.getCommandManager().getInjector();
+       injector.inject(rootNode, serverConn.getPlayer());
+ 
+       // In 1.21.6 a confirmation prompt was added when executing a command via `run_command` click
+       // action if the command is unknown. To prevent this prompt we have to send the command.
+       if (this.playerConnection.getProtocolVersion().lessThan(ProtocolVersion.MINECRAFT_1_21_6)) {
+         rootNode.removeChildByName("velocity:callback");
+       }
+     }
+ 
++    long revision = ++commandTreeRevision;
+     server.getEventManager().fire(
+             new PlayerAvailableCommandsEvent(serverConn.getPlayer(), rootNode))
+-        .thenAcceptAsync(event -> playerConnection.write(commands), playerConnection.eventLoop())
++        .thenAcceptAsync(event -> {
++          if (revision == commandTreeRevision && !playerConnection.isClosed()
++              && serverConn.getPlayer().getConnectedServer() == serverConn) {
++            playerConnection.write(new AvailableCommandsPacket(rootNode));
++          }
++        }, playerConnection.eventLoop())
+         .exceptionally((ex) -> {
+           logger.error("Exception while handling available commands for {}", playerConnection, ex);
+           return null;
+         });
+-    return true;
+   }
+ 
+   @Override
+   public boolean handle(ServerDataPacket packet) {
+     server.getServerListPingHandler().getInitialPing(this.serverConn.getPlayer()).thenComposeAsync(
+         ping -> server.getEventManager()
+             .fire(new ProxyPingEvent(this.serverConn.getPlayer(), ping)),
+         playerConnection.eventLoop()).thenAcceptAsync(pingEvent -> this.playerConnection.write(
+             new ServerDataPacket(new ComponentHolder(
+                 this.serverConn.ensureConnected().getProtocolVersion(),
+                 pingEvent.getPing().getDescriptionComponent()),
+                 pingEvent.getPing().getFavicon().orElse(null), packet.isSecureChatEnforced())),
+         playerConnection.eventLoop());
+     return true;
+   }
+ 
+   @Override
+   public boolean handle(TransferPacket packet) {
+     final InetSocketAddress originalAddress = packet.address();
+     if (originalAddress == null) {
+       logger.error("""
+           Unexpected nullable address received in TransferPacket \
+           from Backend Server in Play State""");
+       return true;
+     }
+     this.server.getEventManager()
+         .fire(new PreTransferEvent(this.serverConn.getPlayer(), originalAddress))
+         .thenAcceptAsync(event -> {
+           if (event.getResult().isAllowed()) {
+             InetSocketAddress resultedAddress = event.getResult().address();
+             if (resultedAddress == null) {
+               resultedAddress = originalAddress;
+             }
+             this.playerConnection.write(new TransferPacket(
+                     resultedAddress.getHostName(), resultedAddress.getPort()));
+           }
+         }, playerConnection.eventLoop());
+     return true;
+   }
+ 
+   @Override
+   public boolean handle(ClientboundStoreCookiePacket packet) {
+     server.getEventManager()
+         .fire(new CookieStoreEvent(serverConn.getPlayer(), packet.getKey(), packet.getPayload()))
+         .thenAcceptAsync(event -> {
+           if (event.getResult().isAllowed()) {
+             final Key resultedKey = event.getResult().getKey() == null
+                 ? event.getOriginalKey() : event.getResult().getKey();
+             final byte[] resultedData = event.getResult().getData() == null
+                 ? event.getOriginalData() : event.getResult().getData();
+ 
+             playerConnection.write(new ClientboundStoreCookiePacket(resultedKey, resultedData));
+           }
+         }, playerConnection.eventLoop());
+ 
+     return true;
+   }
+ 
+   @Override
+   public boolean handle(ClientboundCookieRequestPacket packet) {
+     server.getEventManager().fire(new CookieRequestEvent(serverConn.getPlayer(), packet.getKey()))
+         .thenAcceptAsync(event -> {
+           if (event.getResult().isAllowed()) {
+             final Key resultedKey = event.getResult().getKey() == null
+                 ? event.getOriginalKey() : event.getResult().getKey();
+ 
+             playerConnection.write(new ClientboundCookieRequestPacket(resultedKey));
+           }
+         }, playerConnection.eventLoop());
+ 
+     return true;
+   }
+ 
+   @Override
+   public void handleGeneric(MinecraftPacket packet) {
+     if (packet instanceof PluginMessagePacket pluginMessage) {
+       pluginMessage.retain();
+     }
+     boolean huge = packet instanceof DeferredByteBufHolder def && def.content().readableBytes() > LARGE_PACKET_THRESHOLD;
+     playerConnection.delayedWrite(packet);
 diff --git a/proxy/src/main/java/com/velocitypowered/proxy/connection/backend/VelocityServerConnection.java b/proxy/src/main/java/com/velocitypowered/proxy/connection/backend/VelocityServerConnection.java
-index c40a7aaac674be600d63e3fe27ff9c52872f206e..b965a289f8500ce156a412d8035122861aba55b8 100644
+index c40a7aaa..b965a289 100644
 --- a/proxy/src/main/java/com/velocitypowered/proxy/connection/backend/VelocityServerConnection.java
 +++ b/proxy/src/main/java/com/velocitypowered/proxy/connection/backend/VelocityServerConnection.java
 @@ -1,151 +1,152 @@
@@ -1159,7 +2028,7 @@ index c40a7aaac674be600d63e3fe27ff9c52872f206e..b965a289f8500ce156a412d803512286
    }
  }
 diff --git a/proxy/src/main/java/com/velocitypowered/proxy/connection/client/ClientConfigSessionHandler.java b/proxy/src/main/java/com/velocitypowered/proxy/connection/client/ClientConfigSessionHandler.java
-index bd6ae199788102aff9fe9b0fe727d3d700bb4beb..31be2a1e9745388554899f90a35c4f50682ce0c7 100644
+index bd6ae199..31be2a1e 100644
 --- a/proxy/src/main/java/com/velocitypowered/proxy/connection/client/ClientConfigSessionHandler.java
 +++ b/proxy/src/main/java/com/velocitypowered/proxy/connection/client/ClientConfigSessionHandler.java
 @@ -332,91 +332,94 @@ public class ClientConfigSessionHandler implements MinecraftSessionHandler {
@@ -1260,10 +2129,156 @@ index bd6ae199788102aff9fe9b0fe727d3d700bb4beb..31be2a1e9745388554899f90a35c4f50
    }
  }
 diff --git a/proxy/src/main/java/com/velocitypowered/proxy/connection/client/ConnectedPlayer.java b/proxy/src/main/java/com/velocitypowered/proxy/connection/client/ConnectedPlayer.java
-index b08abe9d822ccc1d64f5573d26ba21d250f062f9..e3505a15f4ab792e29b42b027caec5f5714a54d5 100644
+index b08abe9d..2eecb31d 100644
 --- a/proxy/src/main/java/com/velocitypowered/proxy/connection/client/ConnectedPlayer.java
 +++ b/proxy/src/main/java/com/velocitypowered/proxy/connection/client/ConnectedPlayer.java
-@@ -893,187 +893,203 @@ public class ConnectedPlayer implements MinecraftConnectionAssociation, Player,
+@@ -1,143 +1,145 @@
+ /*
+  * Copyright (C) 2018-2023 Velocity Contributors
+  *
+  * This program is free software: you can redistribute it and/or modify
+  * it under the terms of the GNU General Public License as published by
+  * the Free Software Foundation, either version 3 of the License, or
+  * (at your option) any later version.
+  *
+  * This program is distributed in the hope that it will be useful,
+  * but WITHOUT ANY WARRANTY; without even the implied warranty of
+  * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+  * GNU General Public License for more details.
+  *
+  * You should have received a copy of the GNU General Public License
+  * along with this program.  If not, see <https://www.gnu.org/licenses/>.
+  */
+ 
+ package com.velocitypowered.proxy.connection.client;
+ 
+ import static com.velocitypowered.api.proxy.ConnectionRequestBuilder.Status.ALREADY_CONNECTED;
+ import static com.velocitypowered.proxy.connection.util.ConnectionRequestResults.plainResult;
+ import static java.util.Objects.requireNonNull;
+ import static java.util.concurrent.CompletableFuture.completedFuture;
+ 
+ import com.google.common.base.Preconditions;
+ import com.google.gson.JsonObject;
+ import com.velocitypowered.api.event.connection.DisconnectEvent;
+ import com.velocitypowered.api.event.connection.DisconnectEvent.LoginStatus;
+ import com.velocitypowered.api.event.connection.PreTransferEvent;
+ import com.velocitypowered.api.event.player.CookieRequestEvent;
+ import com.velocitypowered.api.event.player.CookieStoreEvent;
+ import com.velocitypowered.api.event.player.KickedFromServerEvent;
+ import com.velocitypowered.api.event.player.KickedFromServerEvent.DisconnectPlayer;
+ import com.velocitypowered.api.event.player.KickedFromServerEvent.Notify;
+ import com.velocitypowered.api.event.player.KickedFromServerEvent.RedirectPlayer;
+ import com.velocitypowered.api.event.player.KickedFromServerEvent.ServerKickResult;
+ import com.velocitypowered.api.event.player.PlayerModInfoEvent;
+ import com.velocitypowered.api.event.player.PlayerSettingsChangedEvent;
+ import com.velocitypowered.api.event.player.ServerPreConnectEvent;
+ import com.velocitypowered.api.event.player.configuration.PlayerEnterConfigurationEvent;
+ import com.velocitypowered.api.network.HandshakeIntent;
+ import com.velocitypowered.api.network.ProtocolState;
+ import com.velocitypowered.api.network.ProtocolVersion;
+ import com.velocitypowered.api.permission.PermissionFunction;
+ import com.velocitypowered.api.permission.PermissionProvider;
+ import com.velocitypowered.api.permission.Tristate;
+ import com.velocitypowered.api.proxy.ConnectionRequestBuilder;
+ import com.velocitypowered.api.proxy.Player;
+ import com.velocitypowered.api.proxy.ServerConnection;
+ import com.velocitypowered.api.proxy.crypto.IdentifiedKey;
+ import com.velocitypowered.api.proxy.crypto.KeyIdentifiable;
+ import com.velocitypowered.api.proxy.messages.ChannelIdentifier;
+ import com.velocitypowered.api.proxy.messages.PluginMessageEncoder;
+ import com.velocitypowered.api.proxy.player.PlayerSettings;
+ import com.velocitypowered.api.proxy.player.ResourcePackInfo;
+ import com.velocitypowered.api.proxy.server.RegisteredServer;
+ import com.velocitypowered.api.util.GameProfile;
+ import com.velocitypowered.api.util.ModInfo;
+ import com.velocitypowered.api.util.ServerLink;
+ import com.velocitypowered.proxy.VelocityServer;
+ import com.velocitypowered.proxy.adventure.VelocityBossBarImplementation;
+ import com.velocitypowered.proxy.connection.MinecraftConnection;
+ import com.velocitypowered.proxy.connection.MinecraftConnectionAssociation;
++import com.velocitypowered.proxy.connection.MinecraftSessionHandler;
++import com.velocitypowered.proxy.connection.backend.BackendPlaySessionHandler;
+ import com.velocitypowered.proxy.connection.backend.VelocityServerConnection;
+ import com.velocitypowered.proxy.connection.player.bossbar.BossBarManager;
+ import com.velocitypowered.proxy.connection.player.bundle.BundleDelimiterHandler;
+ import com.velocitypowered.proxy.connection.player.resourcepack.VelocityResourcePackInfo;
+ import com.velocitypowered.proxy.connection.player.resourcepack.handler.ResourcePackHandler;
+ import com.velocitypowered.proxy.connection.util.ConnectionMessages;
+ import com.velocitypowered.proxy.connection.util.ConnectionRequestResults.Impl;
+ import com.velocitypowered.proxy.connection.util.VelocityInboundConnection;
+ import com.velocitypowered.proxy.protocol.StateRegistry;
+ import com.velocitypowered.proxy.protocol.netty.MinecraftEncoder;
+ import com.velocitypowered.proxy.protocol.packet.BundleDelimiterPacket;
+ import com.velocitypowered.proxy.protocol.packet.ClientSettingsPacket;
+ import com.velocitypowered.proxy.protocol.packet.ClientboundCookieRequestPacket;
+ import com.velocitypowered.proxy.protocol.packet.ClientboundSoundEntityPacket;
+ import com.velocitypowered.proxy.protocol.packet.ClientboundStopSoundPacket;
+ import com.velocitypowered.proxy.protocol.packet.ClientboundStoreCookiePacket;
+ import com.velocitypowered.proxy.protocol.packet.DisconnectPacket;
+ import com.velocitypowered.proxy.protocol.packet.HeaderAndFooterPacket;
+ import com.velocitypowered.proxy.protocol.packet.KeepAlivePacket;
+ import com.velocitypowered.proxy.protocol.packet.PluginMessagePacket;
+ import com.velocitypowered.proxy.protocol.packet.RemoveResourcePackPacket;
+ import com.velocitypowered.proxy.protocol.packet.TransferPacket;
+ import com.velocitypowered.proxy.protocol.packet.chat.ChatQueue;
+ import com.velocitypowered.proxy.protocol.packet.chat.ComponentHolder;
+ import com.velocitypowered.proxy.protocol.packet.chat.PlayerChatCompletionPacket;
+ import com.velocitypowered.proxy.protocol.packet.chat.builder.ChatBuilderFactory;
+ import com.velocitypowered.proxy.protocol.packet.chat.builder.ChatBuilderV2;
+ import com.velocitypowered.proxy.protocol.packet.chat.legacy.LegacyChatPacket;
+ import com.velocitypowered.proxy.protocol.packet.config.ClientboundServerLinksPacket;
+ import com.velocitypowered.proxy.protocol.packet.config.StartUpdatePacket;
+ import com.velocitypowered.proxy.protocol.packet.title.GenericTitlePacket;
+ import com.velocitypowered.proxy.protocol.util.ByteBufDataOutput;
+ import com.velocitypowered.proxy.server.VelocityRegisteredServer;
+ import com.velocitypowered.proxy.tablist.InternalTabList;
+ import com.velocitypowered.proxy.tablist.KeyedVelocityTabList;
+ import com.velocitypowered.proxy.tablist.VelocityTabList;
+ import com.velocitypowered.proxy.tablist.VelocityTabListLegacy;
+ import com.velocitypowered.proxy.util.ClosestLocaleMatcher;
+ import com.velocitypowered.proxy.util.DurationUtils;
+ import com.velocitypowered.proxy.util.TranslatableMapper;
+ import com.velocitypowered.proxy.util.collect.CappedSet;
+ import io.netty.buffer.ByteBuf;
+ import io.netty.buffer.Unpooled;
+ import java.net.InetSocketAddress;
+ import java.util.Collection;
+ import java.util.Collections;
+ import java.util.HashSet;
+ import java.util.List;
+ import java.util.Locale;
+ import java.util.Objects;
+ import java.util.Optional;
+ import java.util.Set;
+ import java.util.UUID;
+ import java.util.concurrent.CompletableFuture;
+ import java.util.concurrent.CompletionException;
+ import java.util.concurrent.ThreadLocalRandom;
+ import java.util.concurrent.TimeUnit;
+ import net.kyori.adventure.bossbar.BossBar;
+ import net.kyori.adventure.identity.Identity;
+ import net.kyori.adventure.key.Key;
+ import net.kyori.adventure.permission.PermissionChecker;
+ import net.kyori.adventure.pointer.Pointers;
+ import net.kyori.adventure.pointer.PointersSupplier;
+ import net.kyori.adventure.resource.ResourcePackInfoLike;
+ import net.kyori.adventure.resource.ResourcePackRequest;
+ import net.kyori.adventure.resource.ResourcePackRequestLike;
+ import net.kyori.adventure.sound.Sound;
+ import net.kyori.adventure.sound.SoundStop;
+ import net.kyori.adventure.text.Component;
+ import net.kyori.adventure.text.format.NamedTextColor;
+ import net.kyori.adventure.text.logger.slf4j.ComponentLogger;
+ import net.kyori.adventure.text.minimessage.translation.Argument;
+ import net.kyori.adventure.text.serializer.legacy.LegacyComponentSerializer;
+ import net.kyori.adventure.text.serializer.plain.PlainTextComponentSerializer;
+ import net.kyori.adventure.title.Title.Times;
+ import net.kyori.adventure.title.TitlePart;
+ import net.kyori.adventure.translation.GlobalTranslator;
+ import org.checkerframework.checker.nullness.qual.MonotonicNonNull;
+ import org.checkerframework.checker.nullness.qual.NonNull;
+ import org.checkerframework.checker.nullness.qual.Nullable;
+@@ -893,187 +895,203 @@ public class ConnectedPlayer implements MinecraftConnectionAssociation, Player,
  
    /**
     * Finds another server to attempt to log into, if we were unexpectedly disconnected from the
@@ -1475,7 +2490,182 @@ index b08abe9d822ccc1d64f5573d26ba21d250f062f9..e3505a15f4ab792e29b42b027caec5f5
      } else if (emitter instanceof ConnectedPlayer player) {
        if ((soundEmitterServerConn = player.getConnectedServer()) == null) {
          return;
-@@ -1311,173 +1327,179 @@ public class ConnectedPlayer implements MinecraftConnectionAssociation, Player,
+@@ -1153,331 +1171,354 @@ public class ConnectedPlayer implements MinecraftConnectionAssociation, Player,
+     Preconditions.checkArgument(
+         this.getProtocolVersion().noLessThan(ProtocolVersion.MINECRAFT_1_20_5),
+         "Player version must be at least 1.20.5 to be able to retrieve cookies");
+ 
+     server.getEventManager().fire(new CookieRequestEvent(this, key))
+         .thenAcceptAsync(event -> {
+           if (event.getResult().isAllowed()) {
+             final Key resultedKey = event.getResult().getKey() == null
+                 ? event.getOriginalKey() : event.getResult().getKey();
+ 
+             connection.write(new ClientboundCookieRequestPacket(resultedKey));
+           }
+         }, connection.eventLoop());
+   }
+ 
+   @Override
+   public void setServerLinks(final @NotNull List<ServerLink> links) {
+     Preconditions.checkNotNull(links, "links");
+     Preconditions.checkArgument(
+         this.getProtocolVersion().noLessThan(ProtocolVersion.MINECRAFT_1_21),
+         "Player version must be at least 1.21 to be able to set server links");
+ 
+     if (connection.getState() != StateRegistry.PLAY
+         && connection.getState() != StateRegistry.CONFIG) {
+       throw new IllegalStateException("Can only send server links in CONFIGURATION or PLAY protocol");
+     }
+ 
+     connection.write(new ClientboundServerLinksPacket(links.stream()
+         .map(l -> new ClientboundServerLinksPacket.ServerLink(
+             l.getBuiltInType().map(Enum::ordinal).orElse(-1),
+             l.getCustomLabel()
+                 .map(c -> new ComponentHolder(getProtocolVersion(), translateMessage(c)))
+                 .orElse(null),
+             l.getUrl().toString()))
+         .toList()));
+   }
+ 
+   @Override
+   public void addCustomChatCompletions(@NotNull Collection<String> completions) {
+     Preconditions.checkNotNull(completions, "completions");
+     this.sendCustomChatCompletionPacket(completions, PlayerChatCompletionPacket.Action.ADD);
+   }
+ 
+   @Override
+   public void removeCustomChatCompletions(@NotNull Collection<String> completions) {
+     Preconditions.checkNotNull(completions, "completions");
+     this.sendCustomChatCompletionPacket(completions, PlayerChatCompletionPacket.Action.REMOVE);
+   }
+ 
+   @Override
+   public void setCustomChatCompletions(@NotNull Collection<String> completions) {
+     Preconditions.checkNotNull(completions, "completions");
+     this.sendCustomChatCompletionPacket(completions, PlayerChatCompletionPacket.Action.SET);
+   }
+ 
+   private void sendCustomChatCompletionPacket(@NotNull Collection<String> completions,
+                                               PlayerChatCompletionPacket.Action action) {
+     if (connection.getProtocolVersion().noLessThan(ProtocolVersion.MINECRAFT_1_19_1)) {
+       connection.write(new PlayerChatCompletionPacket(completions.toArray(new String[0]), action));
+     }
+   }
+ 
+   @Override
+   public void spoofChatInput(String input) {
+     Preconditions.checkArgument(input.length() <= LegacyChatPacket.MAX_SERVERBOUND_MESSAGE_LENGTH,
+         "input cannot be greater than " + LegacyChatPacket.MAX_SERVERBOUND_MESSAGE_LENGTH
+             + " characters in length");
+     if (getProtocolVersion().noLessThan(ProtocolVersion.MINECRAFT_1_19)) {
+       ChatBuilderV2 message = getChatBuilderFactory().builder().asPlayer(this).message(input);
+       this.chatQueue.queuePacket(chatState -> {
+         message.setTimestamp(chatState.lastTimestamp);
+         message.setLastSeenMessages(chatState.createLastSeen());
+         return message.toServer();
+       });
+     } else {
+       ensureBackendConnection().write(getChatBuilderFactory().builder()
+           .asPlayer(this).message(input).toServer());
+     }
+   }
+ 
++  @Override
++  public void refreshCommands() {
++    connection.eventLoop().execute(() -> {
++      if (connection.isClosed()) {
++        return;
++      }
++      VelocityServerConnection currentServer = connectedServer;
++      if (currentServer == null || currentServer.getConnection() == null) {
++        return;
++      }
++      MinecraftSessionHandler handler = currentServer.getConnection().getActiveSessionHandler();
++      if (handler instanceof BackendPlaySessionHandler backendPlayHandler) {
++        backendPlayHandler.refreshCommands();
++      }
++    });
++  }
++
+   /**
+    * Get the ResourcePackHandler corresponding to the player's version.
+    *
+    * @return the ResourcePackHandler of this player
+    */
+   public ResourcePackHandler resourcePackHandler() {
+     return this.resourcePackHandler;
+   }
+ 
+   @Override
+   @Deprecated
+   public void sendResourcePack(String url) {
+     sendResourcePackOffer(new VelocityResourcePackInfo.BuilderImpl(url).build());
+   }
+ 
+   @Override
+   @Deprecated
+   public void sendResourcePack(String url, byte[] hash) {
+     sendResourcePackOffer(new VelocityResourcePackInfo.BuilderImpl(url).setHash(hash).build());
+   }
+ 
+   @Override
+   public void sendResourcePackOffer(ResourcePackInfo packInfo) {
+     this.resourcePackHandler.checkAlreadyAppliedPack(packInfo.getHash());
+     if (this.getProtocolVersion().noLessThan(ProtocolVersion.MINECRAFT_1_8)) {
+       Preconditions.checkNotNull(packInfo, "packInfo");
+       this.resourcePackHandler.queueResourcePack(packInfo);
+     }
+   }
+ 
+   @Override
+   public void sendResourcePacks(@NotNull ResourcePackRequest request) {
+     if (this.getProtocolVersion().noLessThan(ProtocolVersion.MINECRAFT_1_8)) {
+       Preconditions.checkNotNull(request, "packRequest");
+       this.resourcePackHandler.queueResourcePack(request);
+     }
+   }
+ 
+   @Override
+   public void clearResourcePacks() {
+     if (this.getProtocolVersion().noLessThan(ProtocolVersion.MINECRAFT_1_20_3)) {
+       connection.write(new RemoveResourcePackPacket());
+       this.resourcePackHandler.clearAppliedResourcePacks();
+     }
+   }
+ 
+   @Override
+   public void removeResourcePacks(@NotNull UUID id, @NotNull UUID @NotNull ... others) {
+     if (this.getProtocolVersion().noLessThan(ProtocolVersion.MINECRAFT_1_20_3)) {
+       Preconditions.checkNotNull(id, "packUUID");
+       if (this.resourcePackHandler.remove(id)) {
+         connection.write(new RemoveResourcePackPacket(id));
+       }
+       for (final UUID other : others) {
+         if (this.resourcePackHandler.remove(other)) {
+           connection.write(new RemoveResourcePackPacket(other));
+         }
+       }
+     }
+   }
+ 
+   @Override
+   public void removeResourcePacks(@NotNull ResourcePackRequest request) {
+     for (final net.kyori.adventure.resource.ResourcePackInfo resourcePackInfo : request.packs()) {
+       removeResourcePacks(resourcePackInfo.id());
+     }
+   }
+ 
+   @Override
+   public void removeResourcePacks(@NotNull ResourcePackRequestLike request) {
+     removeResourcePacks(request.asResourcePackRequest());
+   }
+ 
+   @Override
+   @SuppressWarnings("checkstyle:linelength")
+   public void removeResourcePacks(@NotNull ResourcePackInfoLike request, @NotNull ResourcePackInfoLike @NotNull ... others) {
+     removeResourcePacks(request.asResourcePackInfo().id());
+     for (final ResourcePackInfoLike other : others) {
        removeResourcePacks(other.asResourcePackInfo().id());
      }
    }
@@ -1662,7 +2852,7 @@ index b08abe9d822ccc1d64f5573d26ba21d250f062f9..e3505a15f4ab792e29b42b027caec5f5
        }
 diff --git a/proxy/src/main/java/com/velocitypowered/proxy/event/PacketEventHandler.java b/proxy/src/main/java/com/velocitypowered/proxy/event/PacketEventHandler.java
 new file mode 100644
-index 0000000000000000000000000000000000000000..5df906a94bf7d8ca09f336f5678fa0ad595c0278
+index 00000000..cfebcb30
 --- /dev/null
 +++ b/proxy/src/main/java/com/velocitypowered/proxy/event/PacketEventHandler.java
 @@ -0,0 +1,81 @@
@@ -1747,9 +2937,8 @@ index 0000000000000000000000000000000000000000..5df906a94bf7d8ca09f336f5678fa0ad
 +    return (Class<Packet>) packetType;
 +  }
 +}
-+}
 diff --git a/proxy/src/main/java/com/velocitypowered/proxy/event/VelocityEventManager.java b/proxy/src/main/java/com/velocitypowered/proxy/event/VelocityEventManager.java
-index 9d54b2d0739af2de9758736abadd03af80e20d42..c974c2abbb38e59d5d3d4c451ba211d861a366cb 100644
+index 9d54b2d0..e22c0d80 100644
 --- a/proxy/src/main/java/com/velocitypowered/proxy/event/VelocityEventManager.java
 +++ b/proxy/src/main/java/com/velocitypowered/proxy/event/VelocityEventManager.java
 @@ -1,577 +1,690 @@
@@ -2540,7 +3729,7 @@ index 9d54b2d0739af2de9758736abadd03af80e20d42..c974c2abbb38e59d5d3d4c451ba211d8
 \ No newline at end of file
 +}
 diff --git a/proxy/src/main/java/com/velocitypowered/proxy/protocol/netty/MinecraftDecoder.java b/proxy/src/main/java/com/velocitypowered/proxy/protocol/netty/MinecraftDecoder.java
-index 4d0062d45b2c81f38df09cecce94bc193fd3c687..61e9bcfd2874dd0cc01cdc9a1caa4a1bb07726f1 100644
+index 4d0062d4..61e9bcfd 100644
 --- a/proxy/src/main/java/com/velocitypowered/proxy/protocol/netty/MinecraftDecoder.java
 +++ b/proxy/src/main/java/com/velocitypowered/proxy/protocol/netty/MinecraftDecoder.java
 @@ -1,163 +1,274 @@
@@ -2818,8 +4007,265 @@ index 4d0062d45b2c81f38df09cecce94bc193fd3c687..61e9bcfd2874dd0cc01cdc9a1caa4a1b
      return direction;
    }
  }
+diff --git a/proxy/src/main/java/com/velocitypowered/proxy/protocol/packet/AvailableCommandsPacket.java b/proxy/src/main/java/com/velocitypowered/proxy/protocol/packet/AvailableCommandsPacket.java
+index 6653d763..5223505c 100644
+--- a/proxy/src/main/java/com/velocitypowered/proxy/protocol/packet/AvailableCommandsPacket.java
++++ b/proxy/src/main/java/com/velocitypowered/proxy/protocol/packet/AvailableCommandsPacket.java
+@@ -1,152 +1,160 @@
+ /*
+  * Copyright (C) 2018-2023 Velocity Contributors
+  *
+  * This program is free software: you can redistribute it and/or modify
+  * it under the terms of the GNU General Public License as published by
+  * the Free Software Foundation, either version 3 of the License, or
+  * (at your option) any later version.
+  *
+  * This program is distributed in the hope that it will be useful,
+  * but WITHOUT ANY WARRANTY; without even the implied warranty of
+  * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+  * GNU General Public License for more details.
+  *
+  * You should have received a copy of the GNU General Public License
+  * along with this program.  If not, see <https://www.gnu.org/licenses/>.
+  */
+ 
+ package com.velocitypowered.proxy.protocol.packet;
+ 
+ import com.google.common.base.MoreObjects;
+ import com.google.common.collect.ImmutableList;
+ import com.mojang.brigadier.Command;
+ import com.mojang.brigadier.arguments.ArgumentType;
+ import com.mojang.brigadier.builder.ArgumentBuilder;
+ import com.mojang.brigadier.builder.LiteralArgumentBuilder;
+ import com.mojang.brigadier.builder.RequiredArgumentBuilder;
+ import com.mojang.brigadier.context.CommandContext;
+ import com.mojang.brigadier.suggestion.SuggestionProvider;
+ import com.mojang.brigadier.suggestion.Suggestions;
+ import com.mojang.brigadier.suggestion.SuggestionsBuilder;
+ import com.mojang.brigadier.tree.ArgumentCommandNode;
+ import com.mojang.brigadier.tree.CommandNode;
+ import com.mojang.brigadier.tree.LiteralCommandNode;
+ import com.mojang.brigadier.tree.RootCommandNode;
+ import com.velocitypowered.api.command.CommandSource;
+ import com.velocitypowered.api.network.ProtocolVersion;
+ import com.velocitypowered.proxy.connection.MinecraftSessionHandler;
+ import com.velocitypowered.proxy.protocol.MinecraftPacket;
+ import com.velocitypowered.proxy.protocol.ProtocolUtils;
+ import com.velocitypowered.proxy.protocol.ProtocolUtils.Direction;
+ import com.velocitypowered.proxy.protocol.packet.brigadier.ArgumentPropertyRegistry;
+ import com.velocitypowered.proxy.util.collect.IdentityHashStrategy;
+ import io.netty.buffer.ByteBuf;
+ import it.unimi.dsi.fastutil.objects.Object2IntLinkedOpenCustomHashMap;
+ import it.unimi.dsi.fastutil.objects.Object2IntMap;
+ import java.util.ArrayDeque;
+ import java.util.Deque;
+ import java.util.Iterator;
+ import java.util.List;
++import java.util.Objects;
+ import java.util.Queue;
+ import java.util.concurrent.CompletableFuture;
+ import java.util.function.Predicate;
+ import org.checkerframework.checker.nullness.qual.MonotonicNonNull;
+ import org.checkerframework.checker.nullness.qual.Nullable;
+ 
+ public class AvailableCommandsPacket implements MinecraftPacket {
+ 
+   private static final Command<CommandSource> PLACEHOLDER_COMMAND = source -> 0;
+   private static final Predicate<CommandSource> PLACEHOLDER_REQUIREMENT = source -> true;
+ 
+   private static final byte NODE_TYPE_ROOT = 0x00;
+   private static final byte NODE_TYPE_LITERAL = 0x01;
+   private static final byte NODE_TYPE_ARGUMENT = 0x02;
+ 
+   private static final byte FLAG_NODE_TYPE = 0x03;
+   private static final byte FLAG_EXECUTABLE = 0x04;
+   private static final byte FLAG_IS_REDIRECT = 0x08;
+   private static final byte FLAG_HAS_SUGGESTIONS = 0x10;
+   private static final byte FLAG_IS_RESTRICTED = 0x20;
+ 
+   private @MonotonicNonNull RootCommandNode<CommandSource> rootNode;
+ 
++  public AvailableCommandsPacket() {
++  }
++
++  public AvailableCommandsPacket(RootCommandNode<CommandSource> rootNode) {
++    this.rootNode = Objects.requireNonNull(rootNode, "rootNode");
++  }
++
+   /**
+    * Returns the root node.
+    *
+    * @return the root node
+    */
+   public RootCommandNode<CommandSource> getRootNode() {
+     if (rootNode == null) {
+       throw new IllegalStateException("Packet not yet deserialized");
+     }
+     return rootNode;
+   }
+ 
+   @Override
+   public void decode(ByteBuf buf, Direction direction, ProtocolVersion protocolVersion) {
+     int commands = ProtocolUtils.readVarInt(buf);
+     List<WireNode> wireNodes = ProtocolUtils.newList(commands);
+     for (int i = 0; i < commands; i++) {
+       wireNodes.add(deserializeNode(buf, i, protocolVersion));
+     }
+ 
+     // Iterate over the deserialized nodes and attempt to form a graph. We also resolve any cycles
+     // that exist.
+     Queue<WireNode> nodeQueue = new ArrayDeque<>(wireNodes);
+     while (!nodeQueue.isEmpty()) {
+       boolean cycling = false;
+ 
+       for (Iterator<WireNode> it = nodeQueue.iterator(); it.hasNext(); ) {
+         WireNode node = it.next();
+         if (node.toNode(wireNodes)) {
+           cycling = true;
+           it.remove();
+         }
+       }
+ 
+       if (!cycling) {
+         // Uh-oh. We can't cycle. This is bad.
+         throw new IllegalStateException("Stopped cycling; the root node can't be built.");
+       }
+     }
+ 
+     int rootIdx = ProtocolUtils.readVarInt(buf);
+     rootNode = (RootCommandNode<CommandSource>) wireNodes.get(rootIdx).built;
+   }
+ 
+   @Override
+   public void encode(ByteBuf buf, Direction direction, ProtocolVersion protocolVersion) {
+     // Assign all the children an index.
+     Deque<CommandNode<CommandSource>> childrenQueue = new ArrayDeque<>(ImmutableList.of(rootNode));
+     Object2IntMap<CommandNode<CommandSource>> idMappings = new Object2IntLinkedOpenCustomHashMap<>(
+         IdentityHashStrategy.instance());
+     while (!childrenQueue.isEmpty()) {
+       CommandNode<CommandSource> child = childrenQueue.poll();
+       if (!idMappings.containsKey(child)) {
+         idMappings.put(child, idMappings.size());
+         childrenQueue.addAll(child.getChildren());
+         if (child.getRedirect() != null) {
+           childrenQueue.add(child.getRedirect());
+         }
+       }
+     }
+ 
+     // Now serialize the children.
+     ProtocolUtils.writeVarInt(buf, idMappings.size());
+     for (CommandNode<CommandSource> child : idMappings.keySet()) {
+       serializeNode(child, buf, idMappings, protocolVersion);
+     }
+     ProtocolUtils.writeVarInt(buf, idMappings.getInt(rootNode));
+   }
+ 
+   private static void serializeNode(CommandNode<CommandSource> node, ByteBuf buf,
+       Object2IntMap<CommandNode<CommandSource>> idMappings, ProtocolVersion protocolVersion) {
+     byte flags = 0;
+     if (node.getRedirect() != null) {
+       flags |= FLAG_IS_REDIRECT;
+     }
+     if (node.getCommand() != null) {
+       flags |= FLAG_EXECUTABLE;
+     }
+     if (node.getRequirement() == PLACEHOLDER_REQUIREMENT) {
+       flags |= FLAG_IS_RESTRICTED;
+diff --git a/proxy/src/main/java/com/velocitypowered/proxy/protocol/packet/chat/CommandHandler.java b/proxy/src/main/java/com/velocitypowered/proxy/protocol/packet/chat/CommandHandler.java
+index 8e39d78a..12335855 100644
+--- a/proxy/src/main/java/com/velocitypowered/proxy/protocol/packet/chat/CommandHandler.java
++++ b/proxy/src/main/java/com/velocitypowered/proxy/protocol/packet/chat/CommandHandler.java
+@@ -1,78 +1,86 @@
+ /*
+  * Copyright (C) 2022-2023 Velocity Contributors
+  *
+  * This program is free software: you can redistribute it and/or modify
+  * it under the terms of the GNU General Public License as published by
+  * the Free Software Foundation, either version 3 of the License, or
+  * (at your option) any later version.
+  *
+  * This program is distributed in the hope that it will be useful,
+  * but WITHOUT ANY WARRANTY; without even the implied warranty of
+  * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+  * GNU General Public License for more details.
+  *
+  * You should have received a copy of the GNU General Public License
+  * along with this program.  If not, see <https://www.gnu.org/licenses/>.
+  */
+ 
+ package com.velocitypowered.proxy.protocol.packet.chat;
+ 
+ import com.velocitypowered.api.event.command.CommandExecuteEvent;
+ import com.velocitypowered.proxy.VelocityServer;
+ import com.velocitypowered.proxy.connection.client.ConnectedPlayer;
+ import com.velocitypowered.proxy.protocol.MinecraftPacket;
+ import java.time.Instant;
+ import java.util.concurrent.CompletableFuture;
+ import java.util.function.BiFunction;
+ import java.util.function.Function;
+ import net.kyori.adventure.text.Component;
+ import net.kyori.adventure.text.format.NamedTextColor;
+ import org.apache.logging.log4j.LogManager;
+ import org.apache.logging.log4j.Logger;
+ import org.checkerframework.checker.nullness.qual.Nullable;
+ 
+ public interface CommandHandler<T extends MinecraftPacket> {
+ 
+   Logger logger = LogManager.getLogger(CommandHandler.class);
+ 
+   Class<T> packetClass();
+ 
+   void handlePlayerCommandInternal(T packet);
+ 
+   default boolean handlePlayerCommand(MinecraftPacket packet) {
+     if (packetClass().isInstance(packet)) {
+       handlePlayerCommandInternal(packetClass().cast(packet));
+       return true;
+     }
+     return false;
+   }
+ 
+   default CompletableFuture<MinecraftPacket> runCommand(VelocityServer server,
+       ConnectedPlayer player, String command,
+       Function<Boolean, MinecraftPacket> hasRunPacketFunction) {
++    String normalizedCommand = command.trim();
++    int firstSeparator = normalizedCommand.indexOf(' ');
++    String commandRoot = firstSeparator == -1
++        ? normalizedCommand : normalizedCommand.substring(0, firstSeparator);
++    boolean intercepted = server.getCommandManager().hasCommand(commandRoot, player);
++    if (intercepted) {
++      logger.info("{} issued server command: /{}", player.getUsername(), command);
++    }
+     return server.getCommandManager().executeImmediatelyAsync(player, command)
+-        .thenApply(hasRunPacketFunction);
++        .thenApply(hasRun -> hasRunPacketFunction.apply(intercepted || hasRun));
+   }
+ 
+   default void queueCommandResult(VelocityServer server, ConnectedPlayer player,
+       BiFunction<CommandExecuteEvent, LastSeenMessages, CompletableFuture<MinecraftPacket>> futurePacketCreator,
+       String message, Instant timestamp, @Nullable LastSeenMessages lastSeenMessages,
+                                   CommandExecuteEvent.InvocationInfo invocationInfo) {
+       CompletableFuture<CommandExecuteEvent> eventFuture = server.getCommandManager().callCommandEvent(player, message,
+               invocationInfo);
+       player.getChatQueue().queuePacket(
+         newLastSeenMessages -> eventFuture
+             .thenComposeAsync(event -> futurePacketCreator.apply(event, newLastSeenMessages))
+             .thenApply(pkt -> {
+               if (server.getConfiguration().isLogCommandExecutions()) {
+                 logger.info("{} -> executed command /{}", player, message);
+               }
+               return pkt;
+             }).exceptionally(e -> {
+               logger.info("Exception occurred while running command for {}", player.getUsername(), e);
+               player.sendMessage(
+                   Component.translatable("velocity.command.generic-error", NamedTextColor.RED));
+               return null;
+             }), timestamp, lastSeenMessages);
+   }
+ }
 diff --git a/settings.gradle.kts b/settings.gradle.kts
-index 3159fc73b8ddff8a25506c376003162d4551a9fb..7de2c2749138e930285a65df694e92dad4422b97 100644
+index 3159fc73..7de2c274 100644
 --- a/settings.gradle.kts
 +++ b/settings.gradle.kts
 @@ -1,38 +1,40 @@
