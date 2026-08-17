@@ -1,0 +1,28 @@
+{
+  "id": "complete-carpet-player-commands",
+  "name": "complete-carpet-player-commands",
+  "title": "Complete Carpet player command parity",
+  "description": "",
+  "status": "planning",
+  "dev_type": null,
+  "scope": null,
+  "package": null,
+  "priority": "P2",
+  "creator": "FakePlayerProxy",
+  "assignee": "FakePlayerProxy",
+  "createdAt": "2026-08-16",
+  "completedAt": null,
+  "branch": null,
+  "base_branch": "master",
+  "worktree_path": null,
+  "commit": null,
+  "pr_url": null,
+  "subtasks": [],
+  "children": [
+    "08-16-player-as-action-command"
+  ],
+  "parent": null,
+  "relatedFiles": [],
+  "notes": "",
+  "meta": {}
+}
