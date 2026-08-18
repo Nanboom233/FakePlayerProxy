@@ -6,15 +6,19 @@ import static org.junit.jupiter.api.Assertions.assertNotEquals;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertTrue;
+import static org.junit.jupiter.api.Assertions.assertInstanceOf;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.when;
 
+import com.fakeplayerproxy.utils.Result;
 import com.fakeplayerproxy.world.data.Block;
 import com.fakeplayerproxy.world.data.Decoder;
 import com.fakeplayerproxy.world.entity.Entity;
 import com.fakeplayerproxy.world.entity.Vehicle;
 import com.fakeplayerproxy.world.phys.AABB;
+import com.fakeplayerproxy.world.phys.InteractionHit;
 import com.fakeplayerproxy.world.player.Player;
+import com.velocitypowered.proxy.connection.MinecraftConnection;
 import io.netty.buffer.ByteBuf;
 import io.netty.buffer.Unpooled;
 
@@ -46,6 +50,55 @@ final class WorldTest {
     private static final Key BIOMES = Key.key("minecraft", "worldgen/biome");
     private static final Key OVERWORLD = Key.key("minecraft", "overworld");
     private static final Key NETHER = Key.key("minecraft", "the_nether");
+
+    @Test
+    void raycastSelectsVisibleEntityAndLetsBlocksOccludeIt() {
+        Player player = singleSectionPlayer();
+        player.setPosition(Vector3d.from(8.5, 1.0, 8.5));
+        Entity zombie = player.world().addEntity(
+                2, EntityType.ZOMBIE, Vector3d.from(8.5, 1.0, 5.5),
+                Vector3d.ZERO, 0.0f, 0.0f);
+        player.world().addEntity(
+                3, EntityType.ZOMBIE, Vector3d.from(8.5, 1.0, 7.4),
+                Vector3d.ZERO, 0.0f, 0.0f);
+
+        InteractionHit.EntityHit visible = assertInstanceOf(
+                InteractionHit.EntityHit.class,
+                player.world().raycast(player, 2.0, 4.5, 4.5, 0.0).orElseThrow());
+        assertSame(zombie, visible.entity());
+
+        ChunkSection section = sections(1, 1)[0];
+        section.setBlock(8, 2, 7, Decoder.instance().blockState("minecraft:stone"));
+        installChunk(player.world(), 0, 0, new ChunkSection[] {section});
+
+        assertInstanceOf(InteractionHit.BlockHit.class,
+                player.world().raycast(player, 0.0, 4.5, 4.5, 0.0).orElseThrow());
+    }
+
+    @Test
+    void mountSelectionUsesCarpetBoxAndCoordinateDistance() {
+        Player player = singleSectionPlayer();
+        player.setPosition(Vector3d.from(8.0, 1.0, 8.0));
+        Entity lowerId = player.world().addEntity(
+                2, EntityType.OAK_BOAT, Vector3d.from(9.0, 1.0, 8.0),
+                Vector3d.ZERO, 0.0f, 0.0f);
+        player.world().addEntity(
+                3, EntityType.MINECART, Vector3d.from(7.0, 1.0, 8.0),
+                Vector3d.ZERO, 0.0f, 0.0f);
+        player.world().addEntity(
+                4, EntityType.ZOMBIE, Vector3d.from(8.0, 1.0, 8.0),
+                Vector3d.ZERO, 0.0f, 0.0f);
+        player.world().addEntity(
+                5, EntityType.OAK_BOAT, Vector3d.from(16.0, 1.0, 8.0),
+                Vector3d.ZERO, 0.0f, 0.0f);
+
+        assertSame(lowerId, player.world().mountCandidate(player, player.position(), false).orElseThrow());
+        assertEquals(3, player.world().mountCandidate(
+                player, Vector3d.from(6.5, 1.0, 8.0), true).orElseThrow().id());
+        assertEquals(new Result.Failure<Void, String>(
+                        "fakeplayerproxy.command.rideable_out_of_range"),
+                player.mount(mock(MinecraftConnection.class), Vector3d.from(16.0, 1.0, 8.0), true));
+    }
 
     @Test
     void appliesUpdatesOnlyToLoadedChunksAndKeepsUnknownChunksUnknown() {

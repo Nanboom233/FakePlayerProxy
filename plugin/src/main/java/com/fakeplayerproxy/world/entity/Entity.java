@@ -5,7 +5,6 @@ import java.util.ArrayList;
 import java.util.Collections;
 import java.util.Deque;
 import java.util.List;
-import java.util.Objects;
 
 import com.fakeplayerproxy.world.data.Block;
 import com.fakeplayerproxy.world.world.World;
@@ -21,6 +20,7 @@ import org.cloudburstmc.math.vector.Vector3d;
 import org.geysermc.mcprotocollib.protocol.data.game.entity.MinecartStep;
 import org.geysermc.mcprotocollib.protocol.data.game.entity.metadata.Pose;
 import org.geysermc.mcprotocollib.protocol.data.game.entity.player.PositionElement;
+import org.jetbrains.annotations.NotNull;
 
 /** Base client entity state and collision/relationship behavior. */
 @Accessors(fluent = true)
@@ -77,16 +77,16 @@ public class Entity {
 
     public Entity(
             int id,
-            EntityTypeData definition,
-            Vector3d position,
-            Vector3d velocity,
+            @NotNull EntityTypeData definition,
+            @NotNull Vector3d position,
+            @NotNull Vector3d velocity,
             float yaw,
             float pitch) {
         this.id = id;
-        this.definition = Objects.requireNonNull(definition, "definition");
-        this.position = Objects.requireNonNull(position, "position");
+        this.definition = definition;
+        this.position = position;
         this.codecPosition = position;
-        this.velocity = Objects.requireNonNull(velocity, "velocity");
+        this.velocity = velocity;
         this.yaw = yaw;
         this.pitch = pitch;
         this.pose = definition.defaultPose();
@@ -138,6 +138,14 @@ public class Entity {
         return definition.pushable();
     }
 
+    public boolean isPickable() {
+        return definition.pickable();
+    }
+
+    public float pickRadius() {
+        return definition.pickRadius();
+    }
+
     public boolean ignoresPistonMovement() {
         return !definition.affectedByPiston();
     }
@@ -149,6 +157,13 @@ public class Entity {
     public boolean isBoat() {
         return clientVehicle != null
                 && clientVehicle.movementKind() == EntityTypeData.MovementKind.BOAT;
+    }
+
+    public boolean isCarpetRideable() {
+        return switch (definition.movementKind()) {
+            case MINECART, BOAT, HORSE, CAMEL -> true;
+            default -> false;
+        };
     }
 
     final EntityTypeData.MovementKind movementKind() {
@@ -169,12 +184,12 @@ public class Entity {
         return definition.poses().get(pose.ordinal());
     }
 
-    public void setPosition(Vector3d position) {
-        this.position = Objects.requireNonNull(position, "position");
+    public void setPosition(@NotNull Vector3d position) {
+        this.position = position;
     }
 
-    public void setVelocity(Vector3d velocity) {
-        this.velocity = Objects.requireNonNull(velocity, "velocity");
+    public void setVelocity(@NotNull Vector3d velocity) {
+        this.velocity = velocity;
     }
 
     public void addVelocity(Vector3d delta) {
@@ -186,8 +201,8 @@ public class Entity {
         this.pitch = pitch;
     }
 
-    public void setPose(Pose pose) {
-        this.pose = Objects.requireNonNull(pose, "pose");
+    public void setPose(@NotNull Pose pose) {
+        this.pose = pose;
     }
 
     public void setSharedFlags(byte flags) {

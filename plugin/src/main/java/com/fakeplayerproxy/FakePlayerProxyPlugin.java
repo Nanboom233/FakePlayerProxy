@@ -45,6 +45,7 @@ import org.geysermc.mcprotocollib.protocol.packet.common.clientbound.Clientbound
 import org.geysermc.mcprotocollib.protocol.packet.configuration.clientbound.ClientboundFinishConfigurationPacket;
 import org.geysermc.mcprotocollib.protocol.packet.configuration.clientbound.ClientboundRegistryDataPacket;
 import org.geysermc.mcprotocollib.protocol.packet.configuration.clientbound.ClientboundSelectKnownPacks;
+import org.geysermc.mcprotocollib.protocol.packet.configuration.clientbound.ClientboundUpdateEnabledFeaturesPacket;
 import org.geysermc.mcprotocollib.protocol.packet.configuration.serverbound.ServerboundSelectKnownPacks;
 import org.geysermc.mcprotocollib.protocol.packet.cookie.clientbound.ClientboundCookieRequestPacket;
 import org.geysermc.mcprotocollib.protocol.packet.ingame.clientbound.ClientboundLoginPacket;
@@ -53,6 +54,7 @@ import org.geysermc.mcprotocollib.protocol.packet.ingame.clientbound.Clientbound
 import org.geysermc.mcprotocollib.protocol.packet.ingame.clientbound.ClientboundStartConfigurationPacket;
 import org.geysermc.mcprotocollib.protocol.packet.ingame.clientbound.ClientboundTickingStatePacket;
 import org.geysermc.mcprotocollib.protocol.packet.ingame.clientbound.ClientboundTickingStepPacket;
+import org.geysermc.mcprotocollib.protocol.packet.ingame.clientbound.ClientboundCooldownPacket;
 import org.geysermc.mcprotocollib.protocol.packet.ingame.clientbound.entity.ClientboundAddEntityPacket;
 import org.geysermc.mcprotocollib.protocol.packet.ingame.clientbound.entity.ClientboundEntityPositionSyncPacket;
 import org.geysermc.mcprotocollib.protocol.packet.ingame.clientbound.entity.ClientboundMoveEntityPosPacket;
@@ -74,6 +76,14 @@ import org.geysermc.mcprotocollib.protocol.packet.ingame.clientbound.entity.play
 import org.geysermc.mcprotocollib.protocol.packet.ingame.clientbound.entity.player.ClientboundPlayerPositionPacket;
 import org.geysermc.mcprotocollib.protocol.packet.ingame.clientbound.entity.player.ClientboundPlayerRotationPacket;
 import org.geysermc.mcprotocollib.protocol.packet.ingame.clientbound.entity.player.ClientboundSetHealthPacket;
+import org.geysermc.mcprotocollib.protocol.packet.ingame.clientbound.entity.player.ClientboundSetHeldSlotPacket;
+import org.geysermc.mcprotocollib.protocol.packet.ingame.clientbound.inventory.ClientboundContainerClosePacket;
+import org.geysermc.mcprotocollib.protocol.packet.ingame.clientbound.inventory.ClientboundContainerSetContentPacket;
+import org.geysermc.mcprotocollib.protocol.packet.ingame.clientbound.inventory.ClientboundContainerSetSlotPacket;
+import org.geysermc.mcprotocollib.protocol.packet.ingame.clientbound.inventory.ClientboundMountScreenOpenPacket;
+import org.geysermc.mcprotocollib.protocol.packet.ingame.clientbound.inventory.ClientboundOpenScreenPacket;
+import org.geysermc.mcprotocollib.protocol.packet.ingame.clientbound.inventory.ClientboundSetCursorItemPacket;
+import org.geysermc.mcprotocollib.protocol.packet.ingame.clientbound.inventory.ClientboundSetPlayerInventoryPacket;
 import org.geysermc.mcprotocollib.protocol.packet.ingame.clientbound.level.ClientboundChunkBatchFinishedPacket;
 import org.geysermc.mcprotocollib.protocol.packet.ingame.clientbound.level.ClientboundExplodePacket;
 import org.geysermc.mcprotocollib.protocol.packet.ingame.clientbound.level.ClientboundBlockUpdatePacket;
@@ -87,14 +97,22 @@ import org.geysermc.mcprotocollib.protocol.packet.ingame.clientbound.level.borde
 import org.geysermc.mcprotocollib.protocol.packet.ingame.clientbound.level.border.ClientboundSetBorderCenterPacket;
 import org.geysermc.mcprotocollib.protocol.packet.ingame.clientbound.level.border.ClientboundSetBorderLerpSizePacket;
 import org.geysermc.mcprotocollib.protocol.packet.ingame.clientbound.level.border.ClientboundSetBorderSizePacket;
+import org.geysermc.mcprotocollib.protocol.data.game.entity.player.PlayerAction;
 import org.geysermc.mcprotocollib.protocol.data.game.level.notify.GameEvent;
 import org.geysermc.mcprotocollib.protocol.packet.ingame.serverbound.ServerboundPlayerLoadedPacket;
 import org.geysermc.mcprotocollib.protocol.packet.ingame.serverbound.player.ServerboundMovePlayerPosPacket;
 import org.geysermc.mcprotocollib.protocol.packet.ingame.serverbound.player.ServerboundMovePlayerPosRotPacket;
 import org.geysermc.mcprotocollib.protocol.packet.ingame.serverbound.player.ServerboundMovePlayerRotPacket;
 import org.geysermc.mcprotocollib.protocol.packet.ingame.serverbound.player.ServerboundMovePlayerStatusOnlyPacket;
+import org.geysermc.mcprotocollib.protocol.packet.ingame.serverbound.player.ServerboundPlayerActionPacket;
+import org.geysermc.mcprotocollib.protocol.packet.ingame.serverbound.player.ServerboundSetCarriedItemPacket;
 import org.slf4j.Logger;
 
+/**
+ * Registers commands and mirrors synchronous packet events into each automation player's local
+ * client state. Shadow mode uses this state to keep the backend connection and player actions
+ * active without a frontend client.
+ */
 @Plugin(
         id = "fakeplayerproxy",
         name = "FakePlayerProxy",
@@ -139,7 +157,7 @@ public final class FakePlayerProxyPlugin {
         BrigadierCommand fppCommand = new FppCommand(server, permissionProvider, logger).create();
         CommandMeta fppMeta = commandManager.metaBuilder(fppCommand).plugin(this).build();
         commandManager.register(fppMeta, fppCommand);
-        BrigadierCommand playerCommand = new PlayerCommand(automationManager).create();
+        BrigadierCommand playerCommand = new PlayerCommand(automationManager, logger).create();
         CommandMeta playerMeta = commandManager.metaBuilder(playerCommand).plugin(this).build();
         commandManager.register(playerMeta, playerCommand);
 
@@ -301,10 +319,14 @@ public final class FakePlayerProxyPlugin {
 
     @Subscribe(async = false)
     public void onLogin(ClientboundPacketEvent<ClientboundLoginPacket> event) {
-        withPlayer(event.getPlayer(), (player, backend) ->
-        {
-            player.initializeGame(
-                    event.getPacket().getEntityId(), event.getPacket().getCommonPlayerSpawnInfo());
+        withPlayer(event.getPlayer(), (player, backend) -> {
+            var spawnInfo = event.getPacket().getCommonPlayerSpawnInfo();
+            if (spawnInfo == null || spawnInfo.getGameMode() == null
+                    || spawnInfo.getWorldName() == null) {
+                logger.warn("Ignoring Login local-state update with incomplete spawn information");
+                return;
+            }
+            player.initializeGame(event.getPacket().getEntityId(), spawnInfo);
             player.automationService().enterGame();
         });
     }
@@ -313,10 +335,56 @@ public final class FakePlayerProxyPlugin {
     public void onRespawn(ClientboundPacketEvent<ClientboundRespawnPacket> event) {
         withPlayer(event.getPlayer(), (player, backend) -> {
             ClientboundRespawnPacket packet = event.getPacket();
-            player.respawn(packet.getCommonPlayerSpawnInfo(),
+            var spawnInfo = packet.getCommonPlayerSpawnInfo();
+            if (spawnInfo == null || spawnInfo.getGameMode() == null
+                    || spawnInfo.getWorldName() == null) {
+                logger.warn("Ignoring Respawn local-state update with incomplete spawn information");
+                return;
+            }
+            player.respawn(spawnInfo,
                     packet.isKeepMetadata(), packet.isKeepAttributeModifiers());
             player.automationService().resumeGame();
         });
+    }
+
+    @Subscribe(async = false)
+    public void onContainerContent(ClientboundPacketEvent<ClientboundContainerSetContentPacket> event) {
+        withPlayer(event.getPlayer(), (player, backend) -> player.inventory().apply(event.getPacket()));
+    }
+
+    @Subscribe(async = false)
+    public void onContainerSlot(ClientboundPacketEvent<ClientboundContainerSetSlotPacket> event) {
+        withPlayer(event.getPlayer(), (player, backend) -> player.inventory().apply(event.getPacket()));
+    }
+
+    @Subscribe(async = false)
+    public void onPlayerInventory(ClientboundPacketEvent<ClientboundSetPlayerInventoryPacket> event) {
+        withPlayer(event.getPlayer(), (player, backend) -> player.inventory().apply(event.getPacket()));
+    }
+
+    @Subscribe(async = false)
+    public void onCursorItem(ClientboundPacketEvent<ClientboundSetCursorItemPacket> event) {
+        withPlayer(event.getPlayer(), (player, backend) -> player.inventory().apply(event.getPacket()));
+    }
+
+    @Subscribe(async = false)
+    public void onHeldSlot(ClientboundPacketEvent<ClientboundSetHeldSlotPacket> event) {
+        withPlayer(event.getPlayer(), (player, backend) -> player.inventory().apply(event.getPacket()));
+    }
+
+    @Subscribe(async = false)
+    public void onOpenScreen(ClientboundPacketEvent<ClientboundOpenScreenPacket> event) {
+        withPlayer(event.getPlayer(), (player, backend) -> player.inventory().apply(event.getPacket()));
+    }
+
+    @Subscribe(async = false)
+    public void onMountScreen(ClientboundPacketEvent<ClientboundMountScreenOpenPacket> event) {
+        withPlayer(event.getPlayer(), (player, backend) -> player.inventory().apply(event.getPacket()));
+    }
+
+    @Subscribe(async = false)
+    public void onContainerClose(ClientboundPacketEvent<ClientboundContainerClosePacket> event) {
+        withPlayer(event.getPlayer(), (player, backend) -> player.inventory().apply(event.getPacket()));
     }
 
     @Subscribe(async = false)
@@ -408,6 +476,11 @@ public final class FakePlayerProxyPlugin {
     public void onPlayerPosition(ClientboundPacketEvent<ClientboundPlayerPositionPacket> event) {
         withPlayer(event.getPlayer(), (player, backend) -> {
             ClientboundPlayerPositionPacket packet = event.getPacket();
+            if (packet.getPosition() == null || packet.getDeltaMovement() == null
+                    || packet.getRelatives() == null) {
+                logger.warn("Ignoring PlayerPosition local-state update with missing vectors or relatives");
+                return;
+            }
             player.applyServerPosition(packet.getPosition(), packet.getDeltaMovement(),
                     packet.getYRot(), packet.getXRot(), packet.getRelatives());
             player.automationService().acknowledgePosition(backend, packet.getId());
@@ -426,15 +499,17 @@ public final class FakePlayerProxyPlugin {
 
     @Subscribe(async = false)
     public void onHealth(ClientboundPacketEvent<ClientboundSetHealthPacket> event) {
-        withPlayer(event.getPlayer(), (player, backend) ->
-                player.setHealth(event.getPacket().getHealth()));
+        withPlayer(event.getPlayer(), (player, backend) -> {
+            player.setHealth(event.getPacket().getHealth());
+            player.food(event.getPacket().getFood(), event.getPacket().getSaturation());
+        });
     }
 
     @Subscribe(async = false)
     public void onMotion(ClientboundPacketEvent<ClientboundSetEntityMotionPacket> event) {
         withPlayer(event.getPlayer(), (player, backend) -> {
             var entity = player.world().entity(event.getPacket().getEntityId());
-            if (entity != null) {
+            if (entity != null && event.getPacket().getMovement() != null) {
                 entity.setVelocity(event.getPacket().getMovement());
             }
         });
@@ -444,6 +519,10 @@ public final class FakePlayerProxyPlugin {
     public void onAddEntity(ClientboundPacketEvent<ClientboundAddEntityPacket> event) {
         withPlayer(event.getPlayer(), (player, backend) -> {
             ClientboundAddEntityPacket packet = event.getPacket();
+            if (packet.getType() == null || packet.getMovement() == null) {
+                logger.warn("Ignoring AddEntity local-state update with missing type or movement");
+                return;
+            }
             player.world().addEntity(
                     packet.getEntityId(),
                     packet.getType(),
@@ -517,7 +596,7 @@ public final class FakePlayerProxyPlugin {
         withPlayer(event.getPlayer(), (player, backend) -> {
             ClientboundEntityPositionSyncPacket packet = event.getPacket();
             var entity = player.world().entity(packet.getId());
-            if (entity != null) {
+            if (entity != null && packet.getPosition() != null) {
                 entity.positionSync(packet.getPosition(), packet.getYRot(), packet.getXRot(),
                         packet.isOnGround(), entity.isControlledBy(player));
             }
@@ -529,7 +608,8 @@ public final class FakePlayerProxyPlugin {
         withPlayer(event.getPlayer(), (player, backend) -> {
             ClientboundTeleportEntityPacket packet = event.getPacket();
             var entity = player.world().entity(packet.getId());
-            if (entity != null) {
+            if (entity != null && packet.getPosition() != null
+                    && packet.getDeltaMovement() != null && packet.getRelatives() != null) {
                 entity.teleport(packet.getPosition(), packet.getDeltaMovement(),
                         packet.getYRot(), packet.getXRot(), packet.getRelatives(), packet.isOnGround());
             }
@@ -539,6 +619,10 @@ public final class FakePlayerProxyPlugin {
     @Subscribe(async = false)
     public void onMoveVehicle(ClientboundPacketEvent<ClientboundMoveVehiclePacket> event) {
         withPlayer(event.getPlayer(), (player, backend) -> {
+            if (event.getPacket().getPosition() == null) {
+                logger.warn("Ignoring MoveVehicle local-state update with missing position");
+                return;
+            }
             player.applyVehiclePosition(
                     event.getPacket().getPosition(), event.getPacket().getYRot(), event.getPacket().getXRot());
             player.automationService().acknowledgeVehicle(backend);
@@ -606,7 +690,20 @@ public final class FakePlayerProxyPlugin {
     @Subscribe(async = false)
     public void onAbilities(ClientboundPacketEvent<ClientboundPlayerAbilitiesPacket> event) {
         withPlayer(event.getPlayer(), (player, backend) -> player.abilities(
-                event.getPacket().isCanFly(), event.getPacket().isFlying()));
+                event.getPacket().isInvincible(), event.getPacket().isCanFly(),
+                event.getPacket().isFlying(), event.getPacket().isCreative()));
+    }
+
+    @Subscribe(async = false)
+    public void onCooldown(ClientboundPacketEvent<ClientboundCooldownPacket> event) {
+        withPlayer(event.getPlayer(), (player, backend) -> player.cooldown(
+                event.getPacket().getCooldownGroup(), event.getPacket().getCooldownTicks()));
+    }
+
+    @Subscribe(async = false)
+    public void onEnabledFeatures(ClientboundPacketEvent<ClientboundUpdateEnabledFeaturesPacket> event) {
+        withPlayer(event.getPlayer(), (player, backend) ->
+                player.enabledFeatures(event.getPacket().getFeatures()));
     }
 
     @Subscribe(async = false)
@@ -671,6 +768,24 @@ public final class FakePlayerProxyPlugin {
     }
 
     @Subscribe(async = false)
+    public void onSetCarriedItem(ServerboundPacketEvent<ServerboundSetCarriedItemPacket> event) {
+        withPlayer(event.getPlayer(), (player, backend) ->
+                player.selectedSlot(event.getPacket().getSlot()));
+    }
+
+    @Subscribe(async = false)
+    public void onPlayerAction(ServerboundPacketEvent<ServerboundPlayerActionPacket> event) {
+        if (event.getPacket().getAction() != PlayerAction.RELEASE_USE_ITEM) {
+            return;
+        }
+        withPlayer(event.getPlayer(), (player, backend) -> {
+            if (player.automationService().ownsContinuousUse()) {
+                event.cancel();
+            }
+        });
+    }
+
+    @Subscribe(async = false)
     public void onMovePos(ServerboundPacketEvent<ServerboundMovePlayerPosPacket> event) {
         withPlayer(event.getPlayer(), (player, backend) -> {
             ServerboundMovePlayerPosPacket packet = event.getPacket();
@@ -714,9 +829,14 @@ public final class FakePlayerProxyPlugin {
         if (automationPlayer == null) {
             return;
         }
-        MinecraftConnection backend = automationPlayer.backendConnection();
-        if (backend != null) {
-            action.accept(automationPlayer, backend);
+        try {
+            MinecraftConnection backend = automationPlayer.backendConnection();
+            if (backend != null) {
+                action.accept(automationPlayer, backend);
+            }
+        } catch (RuntimeException updateFailure) {
+            logger.error("Cannot apply synchronous packet local-state update for Velocity player {}",
+                    player.getUsername(), updateFailure);
         }
     }
 }

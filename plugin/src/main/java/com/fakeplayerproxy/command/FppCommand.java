@@ -13,10 +13,10 @@ import com.velocitypowered.api.command.BrigadierCommand;
 import com.velocitypowered.api.command.CommandSource;
 import com.velocitypowered.api.proxy.Player;
 import com.velocitypowered.api.proxy.ProxyServer;
-import java.util.Objects;
 import java.util.Optional;
 import java.util.concurrent.CompletableFuture;
 import net.kyori.adventure.text.Component;
+import org.jetbrains.annotations.NotNull;
 import org.slf4j.Logger;
 
 /** Owns the local FakePlayerProxy configuration command tree. */
@@ -25,10 +25,13 @@ public final class FppCommand {
     private final PermissionProvider permissionProvider;
     private final Logger logger;
 
-    public FppCommand(ProxyServer server, PermissionProvider permissionProvider, Logger logger) {
-        this.server = Objects.requireNonNull(server, "server");
-        this.permissionProvider = Objects.requireNonNull(permissionProvider, "permissionProvider");
-        this.logger = Objects.requireNonNull(logger, "logger");
+    public FppCommand(
+            @NotNull ProxyServer server,
+            @NotNull PermissionProvider permissionProvider,
+            @NotNull Logger logger) {
+        this.server = server;
+        this.permissionProvider = permissionProvider;
+        this.logger = logger;
     }
 
     public BrigadierCommand create() {
@@ -78,9 +81,7 @@ public final class FppCommand {
                                             case Result.Success<Optional<String>, String>(var removedName) -> {
                                                 if (removedName.isEmpty()) {
                                                     logger.warn(
-                                                            "Cannot update the FakePlayerProxy operator "
-                                                                    + "configuration: No saved operator has "
-                                                                    + "the name {}.",
+                                                            "Cannot deop the FakePlayerProxy operator: No saved operator has the name {}.",
                                                             name);
                                                     context.getSource().sendMessage(Component.translatable(
                                                             "fakeplayerproxy.command.operator_not_found"));
@@ -94,7 +95,7 @@ public final class FppCommand {
                                             }
                                             case Result.Failure<Optional<String>, String>(var error) -> {
                                                 logger.warn(
-                                                        "Cannot update the FakePlayerProxy operator configuration: {}",
+                                                        "Cannot deop the FakePlayerProxy operator: {}",
                                                         error);
                                                 context.getSource().sendMessage(Component.translatable(
                                                         "fakeplayerproxy.command.operator_update_failed"));
@@ -107,6 +108,8 @@ public final class FppCommand {
     }
 
     private CompletableFuture<Suggestions> suggestOnlinePlayers(
+            // IDEA reports this callback context as unused. Brigadier owns the callback signature.
+            //noinspection unused
             CommandContext<CommandSource> context,
             SuggestionsBuilder builder) {
         server.getAllPlayers().stream()
@@ -117,6 +120,8 @@ public final class FppCommand {
     }
 
     private CompletableFuture<Suggestions> suggestOperators(
+            // IDEA reports this callback context as unused. Brigadier owns the callback signature.
+            //noinspection unused
             CommandContext<CommandSource> context,
             SuggestionsBuilder builder) {
         permissionProvider.names().forEach(builder::suggest);

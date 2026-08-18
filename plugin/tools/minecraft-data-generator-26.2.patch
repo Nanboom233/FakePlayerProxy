@@ -1,8 +1,15 @@
 diff --git a/mc/26.2/src/main/java/dev/u9g/minecraftdatagenerator/generators/BlocksDataGenerator.java b/mc/26.2/src/main/java/dev/u9g/minecraftdatagenerator/generators/BlocksDataGenerator.java
-index 4bcef97..8f0772a 100644
+index 84545fc..7be599c 100644
 --- a/mc/26.2/src/main/java/dev/u9g/minecraftdatagenerator/generators/BlocksDataGenerator.java
 +++ b/mc/26.2/src/main/java/dev/u9g/minecraftdatagenerator/generators/BlocksDataGenerator.java
-@@ -16,6 +16,8 @@ import net.minecraft.world.item.Items;
+@@ -9,34 +9,41 @@ import net.minecraft.core.Registry;
+ import net.minecraft.core.registries.Registries;
+ import net.minecraft.resources.Identifier;
+ import net.minecraft.server.MinecraftServer;
+ import net.minecraft.server.level.ServerLevel;
+ import net.minecraft.world.item.Item;
+ import net.minecraft.world.item.ItemStack;
+ import net.minecraft.world.item.Items;
  import net.minecraft.world.level.EmptyBlockGetter;
  import net.minecraft.world.level.block.AirBlock;
  import net.minecraft.world.level.block.Block;
@@ -11,7 +18,7 @@ index 4bcef97..8f0772a 100644
  import net.minecraft.world.level.block.state.BlockState;
  import net.minecraft.world.level.block.state.properties.BooleanProperty;
  import net.minecraft.world.level.block.state.properties.EnumProperty;
-@@ -23,6 +25,10 @@ import net.minecraft.world.level.block.state.properties.IntegerProperty;
+ import net.minecraft.world.level.block.state.properties.IntegerProperty;
  import net.minecraft.world.level.block.state.properties.Property;
  import net.minecraft.world.level.storage.loot.LootParams;
  import net.minecraft.world.level.storage.loot.parameters.LootContextParams;
@@ -22,18 +29,39 @@ index 4bcef97..8f0772a 100644
  import net.minecraft.world.phys.Vec3;
  import net.minecraft.world.phys.shapes.VoxelShape;
  import org.slf4j.Logger;
-@@ -30,6 +36,7 @@ import org.slf4j.LoggerFactory;
- 
+ import org.slf4j.LoggerFactory;
+-
++
  import java.util.ArrayList;
  import java.util.Collection;
 +import java.util.Comparator;
  import java.util.List;
  import java.util.stream.Collectors;
- 
-@@ -152,6 +159,39 @@ public class BlocksDataGenerator implements IDataGenerator {
+-
++
+ public class BlocksDataGenerator implements IDataGenerator {
+-
++
+     private static final Logger logger = LoggerFactory.getLogger(BlocksDataGenerator.class);
+-
++
+     private static List<Item> getItemsEffectiveForBlock(BlockState blockState) {
+         return DGU.getWorld().registryAccess().lookupOrThrow(Registries.ITEM).stream()
+                 .filter(item -> item.getDefaultInstance().isCorrectToolForDrops(blockState))
+@@ -149,20 +156,67 @@ public class BlocksDataGenerator implements IDataGenerator {
+         blockDesc.addProperty("material", findMatchingBlockMaterial(defaultState, materials));
+-
++
+         blockDesc.addProperty("transparent", !defaultState.canOcclude());
+         blockDesc.addProperty("emitLight", defaultState.getLightEmission());
+         blockDesc.addProperty("filterLight", defaultState.getLightDampening());
+-
++
+         blockDesc.addProperty("defaultState", Block.getId(defaultState));
          blockDesc.addProperty("minStateId", Block.getId(blockStates.getFirst()));
          blockDesc.addProperty("maxStateId", Block.getId(blockStates.getLast()));
- 
+-
++
 +        blockDesc.addProperty("friction", block.getFriction());
 +        blockDesc.addProperty("speedFactor", block.getSpeedFactor());
 +        blockDesc.addProperty("bounciness", block.getBounceRestitution());
@@ -63,6 +91,20 @@ index 4bcef97..8f0772a 100644
 +            physics.addProperty("fluidFalling", fluid.hasProperty(FlowingFluid.FALLING)
 +                    && fluid.getValue(FlowingFluid.FALLING));
 +            physics.addProperty("fluidFaceMask", fluidFaceMask);
++            physics.addProperty("destroySpeed", state.getDestroySpeed(EmptyBlockGetter.INSTANCE, BlockPos.ZERO));
++            physics.addProperty("requiresCorrectToolForDrops", state.requiresCorrectToolForDrops());
++            JsonArray outlineBoxes = new JsonArray();
++            state.getShape(EmptyBlockGetter.INSTANCE, BlockPos.ZERO).toAabbs().forEach(box -> {
++                JsonArray values = new JsonArray();
++                values.add(box.minX);
++                values.add(box.minY);
++                values.add(box.minZ);
++                values.add(box.maxX);
++                values.add(box.maxY);
++                values.add(box.maxZ);
++                outlineBoxes.add(values);
++            });
++            physics.add("outlineBoxes", outlineBoxes);
 +            physicsStates.add(physics);
 +        }
 +        blockDesc.add("physicsStates", physicsStates);
@@ -70,10 +112,28 @@ index 4bcef97..8f0772a 100644
          JsonArray stateProperties = new JsonArray();
          for (Property<?> property : block.getStateDefinition().getProperties()) {
              stateProperties.add(generateStateProperty(property));
-@@ -184,6 +224,19 @@ public class BlocksDataGenerator implements IDataGenerator {
+         }
+         blockDesc.add("states", stateProperties);
+-
++
+         //Only add harvest tools if tool is required for harvesting this block
+         if (defaultState.requiresCorrectToolForDrops()) {
+             Registry<Item> itemRegistry = DGU.getWorld().registryAccess().lookupOrThrow(Registries.ITEM);
+             JsonObject effectiveToolsObject = new JsonObject();
+@@ -181,20 +235,33 @@ public class BlocksDataGenerator implements IDataGenerator {
+             dropsArray.add(itemRegistry.getId(dropStack.getItem()));
+         }
+         blockDesc.add("drops", dropsArray);
+-
++
+         VoxelShape blockCollisionShape = defaultState.getCollisionShape(EmptyBlockGetter.INSTANCE, BlockPos.ZERO);
+         blockDesc.addProperty("boundingBox", blockCollisionShape.isEmpty() ? "empty" : "block");
+-
++
          return blockDesc;
      }
- 
+-
++
 +    private static String stateKey(Identifier block, BlockState state) {
 +        StringBuilder result = new StringBuilder(block.toString());
 +        List<Property.Value<?>> values = state.getValues()
@@ -90,11 +150,22 @@ index 4bcef97..8f0772a 100644
      @Override
      public String getDataName() {
          return "blocks";
+     }
+-
++
+     @Override
+     public JsonArray generateDataJson() {
+         JsonArray resultBlocksArray = new JsonArray();
+         List<MaterialsDataGenerator.MaterialInfo> availableMaterials = MaterialsDataGenerator.getGlobalMaterialInfo();
+         Registry<Block> blockRegistry = DGU.getWorld().registryAccess().lookupOrThrow(Registries.BLOCK);
 diff --git a/mc/26.2/src/main/java/dev/u9g/minecraftdatagenerator/generators/EntitiesDataGenerator.java b/mc/26.2/src/main/java/dev/u9g/minecraftdatagenerator/generators/EntitiesDataGenerator.java
-index fe12ad4..49b3034 100644
+index 9742078..a9157d8 100644
 --- a/mc/26.2/src/main/java/dev/u9g/minecraftdatagenerator/generators/EntitiesDataGenerator.java
 +++ b/mc/26.2/src/main/java/dev/u9g/minecraftdatagenerator/generators/EntitiesDataGenerator.java
-@@ -3,23 +3,35 @@ package dev.u9g.minecraftdatagenerator.generators;
+@@ -1,63 +1,184 @@
+ package dev.u9g.minecraftdatagenerator.generators;
+-
++
  import com.google.gson.JsonArray;
  import com.google.gson.JsonObject;
  import dev.u9g.minecraftdatagenerator.util.DGU;
@@ -111,49 +182,68 @@ index fe12ad4..49b3034 100644
 +import net.minecraft.world.entity.EntityDimensions;
  import net.minecraft.world.entity.EntitySpawnReason;
  import net.minecraft.world.entity.EntityType;
+ import net.minecraft.world.entity.EntityTypes;
  import net.minecraft.world.entity.LivingEntity;
  import net.minecraft.world.entity.Mob;
 +import net.minecraft.world.entity.Pose;
-+import net.minecraft.world.phys.Vec3;
++import net.minecraft.world.entity.ai.attributes.AttributeSupplier;
++import net.minecraft.world.entity.ai.attributes.Attributes;
++import net.minecraft.world.entity.ai.attributes.DefaultAttributes;
  import net.minecraft.world.entity.ambient.AmbientCreature;
  import net.minecraft.world.entity.animal.Animal;
  import net.minecraft.world.entity.animal.fish.WaterAnimal;
  import net.minecraft.world.entity.monster.Monster;
  import net.minecraft.world.entity.projectile.Projectile;
-+import net.minecraft.world.entity.ai.attributes.Attributes;
-+import net.minecraft.world.entity.ai.attributes.AttributeSupplier;
-+import net.minecraft.world.entity.ai.attributes.DefaultAttributes;
- 
++import net.minecraft.world.phys.Vec3;
+-
++
  public class EntitiesDataGenerator implements IDataGenerator {
 +    private static final Map<Pose, EntityDimensions> PLAYER_POSES = playerPoses();
 +
      public static JsonObject generateEntity(Registry<EntityType<?>> entityRegistry, EntityType<?> entityType) {
          JsonObject entityDesc = new JsonObject();
          Identifier registryKey = entityRegistry.getKey(entityType);
-@@ -36,22 +48,136 @@ public class EntitiesDataGenerator implements IDataGenerator {
+         int entityRawId = entityRegistry.getId(entityType);
+-
++
+         entityDesc.addProperty("id", entityRawId);
+         entityDesc.addProperty("internalId", entityRawId);
+         entityDesc.addProperty("name", registryKey.getPath());
+-
++
+         entityDesc.addProperty("displayName", DGU.translateText(entityType.getDescriptionId()));
+         entityDesc.addProperty("width", entityType.getDimensions().width());
+         entityDesc.addProperty("height", entityType.getDimensions().height());
+-
++
          String entityTypeString = "UNKNOWN";
          MinecraftServer minecraftServer = DGU.getCurrentlyRunningServer();
- 
+-
++
 +        Entity entityObject = null;
          if (minecraftServer != null) {
 -            Entity entityObject = entityType.create(minecraftServer.overworld(), EntitySpawnReason.NATURAL);
 +            entityObject = entityType.create(minecraftServer.overworld(), EntitySpawnReason.NATURAL);
              entityTypeString = entityObject != null ? getEntityTypeForClass(entityObject.getClass()) : "unknown";
          }
--        if (entityType == EntityType.PLAYER) {
-+        if (registryKey.getPath().equals("player")) {
+         if (entityType == EntityTypes.PLAYER) {
              entityTypeString = "player";
          }
- 
+-
++
          entityDesc.addProperty("type", entityTypeString);
          entityDesc.addProperty("category", getCategoryFrom(entityType));
 +        AttributeSupplier attributes = DefaultAttributes.hasSupplier(entityType)
 +                ? DefaultAttributes.getSupplier((EntityType<? extends LivingEntity>) entityType) : null;
 +        entityDesc.addProperty("living", attributes != null);
-+        entityDesc.addProperty("pushable", entityObject != null ? entityObject.isPushable() : registryKey.getPath().equals("player"));
++        entityDesc.addProperty("pushable", entityObject != null
++                ? entityObject.isPushable() : entityType == EntityTypes.PLAYER);
 +        entityDesc.addProperty("movementCollision", entityObject != null && entityObject.canBeCollidedWith(null));
 +        entityDesc.addProperty("pistonReaction", entityObject != null
 +                && entityObject.getPistonPushReaction() == net.minecraft.world.level.material.PushReaction.IGNORE ? 1 : 0);
++        entityDesc.addProperty("pickable", entityObject != null
++                ? entityObject.isPickable() : entityType == EntityTypes.PLAYER);
++        entityDesc.addProperty("pickRadius", entityObject != null ? entityObject.getPickRadius() : 0.0F);
 +        JsonObject metadataDefaults = new JsonObject();
 +        metadataDefaults.addProperty("sharedFlags", 0);
 +        metadataDefaults.addProperty("noGravity", entityObject != null && entityObject.isNoGravity());
@@ -162,14 +252,13 @@ index fe12ad4..49b3034 100644
 +                ? livingEntity.getHealth() : attributes != null ? attributes.getValue(Attributes.MAX_HEALTH) : 0.0F);
 +        entityDesc.add("metadataDefaults", metadataDefaults);
 +        JsonObject metadataSchema = new JsonObject();
-+        metadataSchema.addProperty("sharedFlags", metadataId(
-+                "net.minecraft.world.entity.Entity", "DATA_SHARED_FLAGS_ID"));
-+        metadataSchema.addProperty("noGravity", metadataId(
-+                "net.minecraft.world.entity.Entity", "DATA_NO_GRAVITY"));
-+        metadataSchema.addProperty("pose", metadataId(
-+                "net.minecraft.world.entity.Entity", "DATA_POSE"));
-+        metadataSchema.addProperty("health", attributes != null ? metadataId(
-+                "net.minecraft.world.entity.LivingEntity", "DATA_HEALTH_ID") : -1);
++        metadataSchema.addProperty("sharedFlags", metadataId("net.minecraft.world.entity.Entity", "DATA_SHARED_FLAGS_ID"));
++        metadataSchema.addProperty("noGravity", metadataId("net.minecraft.world.entity.Entity", "DATA_NO_GRAVITY"));
++        metadataSchema.addProperty("pose", metadataId("net.minecraft.world.entity.Entity", "DATA_POSE"));
++        metadataSchema.addProperty("health", attributes != null
++                ? metadataId("net.minecraft.world.entity.LivingEntity", "DATA_HEALTH_ID") : -1);
++        metadataSchema.addProperty("livingFlags", attributes != null
++                ? metadataId("net.minecraft.world.entity.LivingEntity", "DATA_LIVING_ENTITY_FLAGS") : -1);
 +        metadataSchema.addProperty("horseFlags", switch (registryKey.getPath()) {
 +            case "horse", "donkey", "mule", "skeleton_horse", "zombie_horse", "llama", "trader_llama",
 +                    "camel", "camel_husk" -> metadataId(
@@ -193,7 +282,7 @@ index fe12ad4..49b3034 100644
 +        JsonArray poseDimensions = new JsonArray();
 +        for (Pose pose : Pose.values()) {
 +            EntityDimensions dimensions = entityObject != null ? entityObject.getDimensions(pose)
-+                    : registryKey.getPath().equals("player")
++                    : entityType == EntityTypes.PLAYER
 +                            ? PLAYER_POSES.getOrDefault(pose, PLAYER_POSES.get(Pose.STANDING))
 +                            : entityType.getDimensions();
 +            JsonObject poseDesc = new JsonObject();
@@ -219,20 +308,18 @@ index fe12ad4..49b3034 100644
 +            movementAttributes.addProperty("scale", attributes.getValue(Attributes.SCALE));
 +            movementAttributes.addProperty("stepHeight", attributes.getValue(Attributes.STEP_HEIGHT));
 +            movementAttributes.addProperty("movementSpeed", attributes.getValue(Attributes.MOVEMENT_SPEED));
-+            movementAttributes.addProperty("movementEfficiency",
-+                    attributes.getValue(Attributes.MOVEMENT_EFFICIENCY));
-+            movementAttributes.addProperty("waterMovementEfficiency",
-+                    attributes.getValue(Attributes.WATER_MOVEMENT_EFFICIENCY));
++            movementAttributes.addProperty("movementEfficiency", attributes.getValue(Attributes.MOVEMENT_EFFICIENCY));
++            movementAttributes.addProperty("waterMovementEfficiency", attributes.getValue(Attributes.WATER_MOVEMENT_EFFICIENCY));
 +            movementAttributes.addProperty("bounciness", attributes.getValue(Attributes.BOUNCINESS));
 +            entityDesc.add("movementAttributes", movementAttributes);
 +        }
-+        if (entityObject != null) {
-+            entityObject.discard();
-+        }
- 
++        if (entityObject != null) entityObject.discard();
+-
++
          return entityDesc;
      }
- 
+-
++
 +    private static JsonArray vector(Vec3 vector) {
 +        JsonArray result = new JsonArray();
 +        result.add(vector.x());
@@ -247,8 +334,7 @@ index fe12ad4..49b3034 100644
 +            field.setAccessible(true);
 +            return ((net.minecraft.network.syncher.EntityDataAccessor<?>) field.get(null)).id();
 +        } catch (ReflectiveOperationException exception) {
-+            throw new IllegalStateException(
-+                    "Cannot read fixed metadata accessor " + className + "." + fieldName, exception);
++            throw new IllegalStateException("Cannot read fixed metadata accessor " + className + "." + fieldName, exception);
 +        }
 +    }
 +
@@ -264,9 +350,164 @@ index fe12ad4..49b3034 100644
 +    }
 +
      private static String getCategoryFrom(EntityType<?> entityType) {
--        if (entityType == EntityType.PLAYER) return "UNKNOWN";
-+        Identifier registryKey = DGU.getWorld().registryAccess().lookupOrThrow(Registries.ENTITY_TYPE).getKey(entityType);
-+        if (registryKey.getPath().equals("player")) return "UNKNOWN";
+         if (entityType == EntityTypes.PLAYER) return "UNKNOWN";
          Entity entity = entityType.create(DGU.getWorld(), EntitySpawnReason.NATURAL);
          if (entity == null)
              throw new Error("Entity was null after trying to create a: " + DGU.translateText(entityType.getDescriptionId()));
+         entity.discard();
+         String packageName = entity.getClass().getPackageName();
+-
++
+         // Use a more flexible approach to handle sub-packages
+         if (packageName.equals("net.minecraft.world.entity.decoration") ||
+diff --git a/mc/26.2/src/main/java/dev/u9g/minecraftdatagenerator/generators/ItemsDataGenerator.java b/mc/26.2/src/main/java/dev/u9g/minecraftdatagenerator/generators/ItemsDataGenerator.java
+index 65f9987..4272a20 100644
+--- a/mc/26.2/src/main/java/dev/u9g/minecraftdatagenerator/generators/ItemsDataGenerator.java
++++ b/mc/26.2/src/main/java/dev/u9g/minecraftdatagenerator/generators/ItemsDataGenerator.java
+@@ -4,20 +4,29 @@ import com.google.gson.JsonArray;
+ import com.google.gson.JsonObject;
+ import com.google.gson.JsonPrimitive;
+ import dev.u9g.minecraftdatagenerator.util.DGU;
+ import net.minecraft.core.Holder;
+ import net.minecraft.core.Registry;
+ import net.minecraft.core.component.DataComponents;
+ import net.minecraft.core.registries.Registries;
+ import net.minecraft.resources.Identifier;
+ import net.minecraft.world.item.Item;
+ import net.minecraft.world.item.ItemStack;
++import net.minecraft.world.InteractionHand;
++import net.minecraft.world.entity.player.Player;
++import net.minecraft.world.food.FoodProperties;
++import net.minecraft.world.flag.FeatureFlags;
++import net.minecraft.world.item.component.AttackRange;
++import net.minecraft.world.item.component.Consumable;
++import net.minecraft.world.item.component.Tool;
++import net.minecraft.world.item.component.UseCooldown;
++import net.minecraft.world.level.Level;
+ import net.minecraft.world.item.enchantment.Enchantment;
+-
++
+ import java.util.List;
+ import java.util.Objects;
+ import java.util.stream.Collectors;
+-
++
+ public class ItemsDataGenerator implements IDataGenerator {
+-
++
+     private static List<Item> calculateItemsToRepairWith(Registry<Item> itemRegistry, Item sourceItem) {
+         ItemStack sourceItemStack = new ItemStack(sourceItem);
+@@ -25,20 +34,76 @@ public class ItemsDataGenerator implements IDataGenerator {
+                 .filter(otherItem -> sourceItemStack.isValidRepairItem(new ItemStack(otherItem)))
+                 .collect(Collectors.toList());
+     }
+-
++
+     public static JsonObject generateItem(Registry<Item> itemRegistry, Item item) {
+         JsonObject itemDesc = new JsonObject();
+         Identifier registryKey = itemRegistry.getKey(item);
+-
++
+         itemDesc.addProperty("id", itemRegistry.getId(item));
+         itemDesc.addProperty("name", registryKey.getPath());
++        itemDesc.addProperty("registryKey", registryKey.toString());
++        JsonArray requiredFeatures = new JsonArray();
++        FeatureFlags.REGISTRY.toNames(item.requiredFeatures()).stream()
++                .map(Identifier::toString).sorted().forEach(requiredFeatures::add);
++        itemDesc.add("requiredFeatures", requiredFeatures);
++        itemDesc.addProperty("baseUse", inheritsBaseUse(item));
++
++        FoodProperties food = item.components().get(DataComponents.FOOD);
++        if (food != null) {
++            JsonObject value = new JsonObject();
++            value.addProperty("canAlwaysEat", food.canAlwaysEat());
++            itemDesc.add("food", value);
++        }
++        Consumable consumable = item.components().get(DataComponents.CONSUMABLE);
++        if (consumable != null) itemDesc.addProperty("consumeSeconds", consumable.consumeSeconds());
++        UseCooldown cooldown = item.components().get(DataComponents.USE_COOLDOWN);
++        if (cooldown != null) {
++            itemDesc.addProperty("cooldownGroup", cooldown.cooldownGroup()
++                    .map(Identifier::toString).orElse(null));
++        }
++        Tool tool = item.components().get(DataComponents.TOOL);
++        if (tool != null) {
++            JsonObject toolJson = new JsonObject();
++            toolJson.addProperty("defaultMiningSpeed", tool.defaultMiningSpeed());
++            JsonArray rules = new JsonArray();
++            for (Tool.Rule rule : tool.rules()) {
++                JsonObject ruleJson = new JsonObject();
++                rule.blocks().unwrapKey().ifPresentOrElse(
++                        key -> ruleJson.addProperty("tag", key.location().toString()),
++                        () -> {
++                            JsonArray blocks = new JsonArray();
++                            rule.blocks().stream().map(holder -> DGU.getWorld().registryAccess()
++                                            .lookupOrThrow(Registries.BLOCK).getKey(holder.value()).toString())
++                                    .sorted().forEach(blocks::add);
++                            ruleJson.add("blocks", blocks);
++                        });
++                rule.speed().ifPresent(value -> ruleJson.addProperty("speed", value));
++                rule.correctForDrops().ifPresent(value -> ruleJson.addProperty("correctForDrops", value));
++                rules.add(ruleJson);
++            }
++            toolJson.add("rules", rules);
++            itemDesc.add("tool", toolJson);
++        }
++        AttackRange attackRange = item.components().get(DataComponents.ATTACK_RANGE);
++        if (attackRange != null) {
++            JsonArray value = new JsonArray();
++            value.add(attackRange.minReach());
++            value.add(attackRange.maxReach());
++            value.add(attackRange.minCreativeReach());
++            value.add(attackRange.maxCreativeReach());
++            value.add(attackRange.hitboxMargin());
++            value.add(attackRange.mobFactor());
++            itemDesc.add("attackRange", value);
++        }
++        itemDesc.addProperty("blocksAttacks", item.components().has(DataComponents.BLOCKS_ATTACKS));
++        itemDesc.addProperty("kineticWeapon", item.components().has(DataComponents.KINETIC_WEAPON));
+-
++
+         itemDesc.addProperty("displayName", DGU.translateText(item.getDescriptionId()));
+         itemDesc.addProperty("stackSize", item.getDefaultMaxStackSize());
+-
++
+         JsonArray enchantCategoriesArray = new JsonArray();
+         DGU.getWorld().registryAccess().lookupOrThrow(Registries.ENCHANTMENT).stream()
+                 .map(Enchantment::getSupportedItems)
+                 .filter(applicableItems -> applicableItems.contains(itemRegistry.wrapAsHolder(item)))
+                 .map(EnchantmentsDataGenerator::getEnchantmentTargetName)
+                 .distinct()
+@@ -59,20 +124,29 @@ public class ItemsDataGenerator implements IDataGenerator {
+             if (fixedWithArray.size() > 0) {
+                 itemDesc.add("repairWith", fixedWithArray);
+             }
+-
++
+             int maxDurability = Objects.requireNonNull(item.components().get(DataComponents.MAX_DAMAGE));
+             itemDesc.addProperty("maxDurability", maxDurability);
+         }
+         return itemDesc;
+     }
+-
++
++    private static boolean inheritsBaseUse(Item item) {
++        try {
++            return item.getClass().getMethod(
++                    "use", Level.class, Player.class, InteractionHand.class).getDeclaringClass() == Item.class;
++        } catch (NoSuchMethodException exception) {
++            throw new IllegalStateException("Cannot resolve Item.use ownership", exception);
++        }
++    }
++
+     @Override
+     public String getDataName() {
+         return "items";
+     }
+-
++
+     @Override
+     public JsonArray generateDataJson() {
+         JsonArray resultArray = new JsonArray();
+         Registry<Item> itemRegistry = DGU.getWorld().registryAccess().lookupOrThrow(Registries.ITEM);
+         itemRegistry.stream().forEach(item -> resultArray.add(generateItem(itemRegistry, item)));

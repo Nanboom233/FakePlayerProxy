@@ -8,6 +8,7 @@ import static org.mockito.Mockito.clearInvocations;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.inOrder;
+import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
@@ -15,9 +16,11 @@ import com.fakeplayerproxy.world.data.Decoder;
 import com.fakeplayerproxy.world.world.World;
 import com.fakeplayerproxy.world.entity.Entity;
 import com.fakeplayerproxy.world.entity.LivingEntity;
+import com.fakeplayerproxy.utils.Result;
 import com.velocitypowered.proxy.connection.MinecraftConnection;
 import io.netty.buffer.ByteBuf;
 import io.netty.buffer.Unpooled;
+import io.netty.channel.Channel;
 
 import java.util.List;
 import java.util.UUID;
@@ -35,6 +38,7 @@ import org.geysermc.mcprotocollib.protocol.data.game.entity.attribute.Attribute;
 import org.geysermc.mcprotocollib.protocol.data.game.entity.attribute.AttributeType;
 import org.geysermc.mcprotocollib.protocol.data.game.entity.metadata.Equipment;
 import org.geysermc.mcprotocollib.protocol.data.game.entity.player.GameMode;
+import org.geysermc.mcprotocollib.protocol.data.game.entity.player.PlayerAction;
 import org.geysermc.mcprotocollib.protocol.data.game.entity.player.PlayerSpawnInfo;
 import org.geysermc.mcprotocollib.protocol.data.game.entity.type.EntityType;
 import org.geysermc.mcprotocollib.protocol.data.game.item.ItemStack;
@@ -44,6 +48,12 @@ import org.geysermc.mcprotocollib.protocol.packet.ingame.serverbound.level.Serve
 import org.geysermc.mcprotocollib.protocol.packet.ingame.serverbound.level.ServerboundPaddleBoatPacket;
 import org.geysermc.mcprotocollib.protocol.packet.ingame.serverbound.player.ServerboundMovePlayerPosPacket;
 import org.geysermc.mcprotocollib.protocol.packet.ingame.serverbound.player.ServerboundMovePlayerRotPacket;
+import org.geysermc.mcprotocollib.protocol.packet.ingame.serverbound.player.ServerboundPlayerActionPacket;
+import org.geysermc.mcprotocollib.protocol.packet.ingame.serverbound.player.ServerboundInteractPacket;
+import org.geysermc.mcprotocollib.protocol.packet.ingame.serverbound.player.ServerboundAttackPacket;
+import org.geysermc.mcprotocollib.protocol.packet.ingame.serverbound.player.ServerboundPlayerCommandPacket;
+import org.geysermc.mcprotocollib.protocol.packet.ingame.serverbound.player.ServerboundUseItemPacket;
+import org.geysermc.mcprotocollib.protocol.packet.ingame.clientbound.inventory.ClientboundContainerSetContentPacket;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.CsvSource;
@@ -51,6 +61,210 @@ import org.junit.jupiter.params.provider.MethodSource;
 import org.mockito.InOrder;
 
 final class PlayerTest {
+    @Test
+    void entityAttackUsesCurrentInterpolationAndContinuousRetainsItsTarget() {
+        Player player = playerWithFloor();
+        player.applyServerPosition(Vector3d.from(8.5, 1.0, 8.5),
+                Vector3d.ZERO, 180.0f, 0.0f, true);
+        Entity zombie = player.world().addEntity(2, EntityType.ZOMBIE,
+                Vector3d.from(8.5, 1.0, 4.0), Vector3d.ZERO, 0.0f, 0.0f);
+        zombie.interpolate(Vector3d.from(0.0, 0.0, 2.0),
+                true, 0.0f, 0.0f, false, false);
+        MinecraftConnection backend = activeBackend();
+
+        player.passiveTick();
+        player.passiveTick();
+        player.passiveTick();
+        assertEquals(new Result.Success<Boolean, String>(true), player.attack(backend, true));
+        assertEquals(new Result.Success<Boolean, String>(true), player.attack(backend, true));
+
+        verify(backend, times(1)).sendPacket(argThat(packet ->
+                packet instanceof ServerboundAttackPacket attack && attack.getEntityId() == 2));
+    }
+
+    @Test
+    void heldUseAndMovementStateProduceOnlyRequiredPackets() {
+        Player player = playerWithFloor();
+        player.applyServerPosition(Vector3d.from(8.5, 1.0, 8.5),
+                Vector3d.ZERO, 180.0f, 0.0f, true);
+        int apple = Decoder.instance().itemId(Key.key("minecraft", "apple"));
+        ItemStack[] content = new ItemStack[46];
+        content[36] = new ItemStack(apple, 1);
+        player.inventory().apply(new ClientboundContainerSetContentPacket(0, 1, content, null));
+        player.food(19, 0.0f);
+        MinecraftConnection backend = activeBackend();
+
+        assertEquals(new Result.Success<Boolean, String>(true), player.use(backend));
+        assertEquals(new Result.Success<Boolean, String>(true), player.use(backend));
+        verify(backend, times(1)).sendPacket(argThat(packet -> packet instanceof ServerboundUseItemPacket));
+
+        player.moveInput(backend, "forward");
+        player.setSprint(backend, true);
+        player.tick(backend, true);
+        double movedZ = player.position().getZ();
+        player.tick(backend, true);
+        player.setSprint(backend, false);
+        player.tick(backend, true);
+
+        assertTrue(movedZ < 8.5);
+        verify(backend, times(1)).sendPacket(argThat(packet ->
+                packet instanceof ServerboundPlayerCommandPacket command
+                        && command.getState() == org.geysermc.mcprotocollib.protocol.data.game.entity.player.PlayerState.START_SPRINTING));
+        verify(backend, times(1)).sendPacket(argThat(packet ->
+                packet instanceof ServerboundPlayerCommandPacket command
+                        && command.getState() == org.geysermc.mcprotocollib.protocol.data.game.entity.player.PlayerState.STOP_SPRINTING));
+    }
+
+    @Test
+    void carriedSlotChangeLetsContinuousUseStartTheNewItem() {
+        Player player = playerWithFloor();
+        int apple = Decoder.instance().itemId(Key.key("minecraft", "apple"));
+        ItemStack[] content = new ItemStack[46];
+        content[36] = new ItemStack(apple, 1);
+        content[37] = new ItemStack(apple, 1);
+        player.inventory().apply(new ClientboundContainerSetContentPacket(0, 1, content, null));
+        player.food(19, 0.0f);
+        MinecraftConnection backend = activeBackend();
+
+        assertEquals(new Result.Success<Boolean, String>(true), player.use(backend));
+        player.selectedSlot(1);
+        assertEquals(new Result.Success<Boolean, String>(true), player.use(backend));
+
+        verify(backend, times(2)).sendPacket(argThat(packet -> packet instanceof ServerboundUseItemPacket));
+    }
+
+    @Test
+    void backendUseMetadataSuppressesRequestsUntilUseClears() {
+        Player player = playerWithFloor();
+        int apple = Decoder.instance().itemId(Key.key("minecraft", "apple"));
+        ItemStack[] content = new ItemStack[46];
+        content[36] = new ItemStack(apple, 1);
+        player.inventory().apply(new ClientboundContainerSetContentPacket(0, 1, content, null));
+        player.food(19, 0.0f);
+        MinecraftConnection backend = activeBackend();
+        int livingFlags = Decoder.instance().entity(EntityType.PLAYER).livingFlagsMetadataId();
+
+        player.applyMetadata(livingFlags, (byte) 1);
+        assertEquals(new Result.Success<Boolean, String>(true), player.use(backend));
+        verify(backend, never()).sendPacket(argThat(packet -> packet instanceof ServerboundUseItemPacket));
+
+        player.applyMetadata(livingFlags, (byte) 0);
+        assertEquals(new Result.Success<Boolean, String>(true), player.use(backend));
+        verify(backend, times(1)).sendPacket(argThat(packet -> packet instanceof ServerboundUseItemPacket));
+    }
+
+    @Test
+    void environmentalTravelAppliesInputAtTheBranchAcceleration() {
+        Player land = playerWithFloor();
+        land.applyServerPosition(Vector3d.from(8.5, 1.0, 8.5),
+                Vector3d.ZERO, 0.0f, 0.0f, true);
+        land.setInputState(Player.InputState.CLEAR.withMovement("forward"));
+        land.tick(activeBackend(), true);
+
+        Player water = playerWithBlockAtBody(86);
+        water.applyServerPosition(Vector3d.from(8.5, 1.0, 8.5),
+                Vector3d.ZERO, 0.0f, 0.0f, false);
+        water.setInputState(Player.InputState.CLEAR.withMovement("forward"));
+        water.tick(activeBackend(), true);
+
+        assertTrue(land.position().getZ() - 8.5 > water.position().getZ() - 8.5);
+    }
+
+    @Test
+    void waterJumpInputChangesVerticalTravel() {
+        Player passive = playerWithBlockAtBody(86);
+        passive.applyServerPosition(Vector3d.from(8.5, 1.0, 8.5),
+                Vector3d.ZERO, 0.0f, 0.0f, false);
+        passive.tick(activeBackend(), true);
+
+        Player jumping = playerWithBlockAtBody(86);
+        jumping.applyServerPosition(Vector3d.from(8.5, 1.0, 8.5),
+                Vector3d.ZERO, 0.0f, 0.0f, false);
+        jumping.setInputState(Player.InputState.CLEAR.withJump(true));
+        jumping.tick(activeBackend(), true);
+
+        assertTrue(jumping.position().getY() > passive.position().getY());
+        assertTrue(jumping.velocity().getY() > passive.velocity().getY());
+    }
+
+    @Test
+    void jumpInputAppliesGroundVelocityDuringMovement() {
+        Player player = playerWithFloor();
+        player.applyServerPosition(Vector3d.from(8.5, 1.0, 8.5),
+                Vector3d.ZERO, 180.0f, 0.0f, true);
+        MinecraftConnection backend = activeBackend();
+
+        assertEquals(new Result.Success<Void, String>(null), player.jump(backend));
+        player.tick(backend, true);
+
+        assertTrue(player.position().getY() > 1.0);
+        assertTrue(player.velocity().getY() > 0.0);
+    }
+
+    @Test
+    void inventoryCorrectionsAndGenericUsePredictionRemainServerReplaceable() {
+        Player player = playerWithFloor();
+        MinecraftConnection backend = activeBackend();
+        int apple = Decoder.instance().itemId(Key.key("minecraft", "apple"));
+        int saddle = Decoder.instance().saddleItemId();
+        ItemStack[] content = new ItemStack[46];
+        content[36] = new ItemStack(apple, 2);
+        player.inventory().apply(new ClientboundContainerSetContentPacket(0, 4, content, null));
+        player.food(19, 0.0f);
+
+        Result<Boolean, String> modeled = player.use(backend);
+
+        assertEquals(new Result.Success<Boolean, String>(true), modeled);
+        verify(backend).sendPacket(argThat(packet -> packet instanceof ServerboundUseItemPacket));
+        content[36] = new ItemStack(saddle, 1);
+        player.inventory().apply(new ClientboundContainerSetContentPacket(0, 5, content, null));
+        player.inactiveUse(backend);
+        assertEquals(new Result.Success<Boolean, String>(false), player.use(backend));
+        assertEquals(5, player.inventory().stateId());
+        content[36] = null;
+        player.inventory().apply(new ClientboundContainerSetContentPacket(0, 6, content, null));
+        player.world().addEntity(
+                2, EntityType.ZOMBIE, Vector3d.from(0.0, 0.0, -3.0),
+                Vector3d.ZERO, 0.0f, 0.0f);
+
+        assertEquals(new Result.Success<Boolean, String>(false), player.use(backend));
+        verify(backend, times(2)).sendPacket(
+                argThat(packet -> packet instanceof ServerboundInteractPacket));
+    }
+
+    @Test
+    void survivalDestroySendsStartAndFinishWithoutRemovingTheBlockLocally() {
+        Player player = playerWithFloor();
+        player.applyServerPosition(
+                Vector3d.from(8.5, 1.0, 8.5), Vector3d.ZERO, 180.0f, 0.0f, true);
+        ChunkSection section = chunk();
+        fillFloor(section);
+        int stone = Decoder.instance().blockState("minecraft:stone");
+        section.setBlock(8, 2, 7, stone);
+        installChunk(player.world(), new ChunkSection[] {section});
+        ItemStack[] content = new ItemStack[46];
+        content[36] = new ItemStack(
+                Decoder.instance().itemId(Key.key("minecraft", "diamond_pickaxe")), 1);
+        player.inventory().apply(new ClientboundContainerSetContentPacket(0, 1, content, null));
+        player.world().physicalTags(java.util.Map.of(
+                Key.key("minecraft", "block"), java.util.Map.of(
+                        Key.key("minecraft", "mineable/pickaxe"),
+                        new int[] {Decoder.instance().block(stone).blockId()})));
+        MinecraftConnection backend = activeBackend();
+
+        Result<Boolean, String> result = new Result.Success<>(false);
+        for (int tick = 0; tick < 10 && result instanceof Result.Success<Boolean, String>(var success)
+                && !success; tick++) {
+            result = player.attack(backend, false);
+        }
+
+        assertEquals(new Result.Success<Boolean, String>(true), result);
+        verify(backend).sendPacket(argThat(packet -> packet instanceof ServerboundPlayerActionPacket action
+                && action.getAction() == PlayerAction.START_DIGGING));
+        verify(backend).sendPacket(argThat(packet -> packet instanceof ServerboundPlayerActionPacket action
+                && action.getAction() == PlayerAction.FINISH_DIGGING));
+        assertEquals(stone, player.world().blockState(8, 2, 7).orElseThrow());
+    }
     @Test
     void ordinaryKnockbackMovesAndThenDecays() {
         Player player = playerWithFloor();
@@ -636,5 +850,13 @@ final class PlayerTest {
                 mock(com.velocitypowered.api.proxy.Player.class);
         when(velocityPlayer.getUniqueId()).thenReturn(UUID.randomUUID());
         return new Player(velocityPlayer);
+    }
+
+    private static MinecraftConnection activeBackend() {
+        MinecraftConnection backend = mock(MinecraftConnection.class);
+        Channel channel = mock(Channel.class);
+        when(backend.getChannel()).thenReturn(channel);
+        when(channel.isActive()).thenReturn(true);
+        return backend;
     }
 }

@@ -9,11 +9,14 @@ import com.fakeplayerproxy.world.entity.Vehicle;
 import com.fakeplayerproxy.world.phys.AABB;
 import com.fakeplayerproxy.world.phys.FluidPhysics;
 import com.fakeplayerproxy.world.phys.PistonPhysics;
+import com.fakeplayerproxy.world.phys.InteractionHit;
 import com.fakeplayerproxy.world.player.Player;
 import io.netty.buffer.ByteBuf;
 import io.netty.buffer.Unpooled;
 import it.unimi.dsi.fastutil.Pair;
+import lombok.AccessLevel;
 import lombok.Getter;
+import lombok.experimental.Accessors;
 
 import java.util.ArrayList;
 import java.util.HashMap;
@@ -23,7 +26,6 @@ import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.OptionalInt;
-import java.util.Objects;
 import java.util.Set;
 
 import net.kyori.adventure.key.Key;
@@ -41,6 +43,7 @@ import org.geysermc.mcprotocollib.protocol.data.game.level.block.BlockChangeEntr
 import org.geysermc.mcprotocollib.protocol.data.game.level.block.BlockEntityInfo;
 import org.geysermc.mcprotocollib.protocol.data.game.level.block.BlockEntityType;
 import org.geysermc.mcprotocollib.protocol.data.game.level.block.value.PistonValueType;
+import org.jetbrains.annotations.NotNull;
 
 /** Client world view owned by exactly one Plugin player and its connection EventLoop. */
 public final class World {
@@ -59,6 +62,7 @@ public final class World {
     private final Map<Vector3i, MovingPiston> movingPistons = new HashMap<>();
     private MovingPiston activePiston;
     private Set<Integer> climbableBlockIds = Set.of();
+    private Map<Key, Set<Integer>> blockTags = Map.of();
     private boolean physicalTagsReceived;
 
     private Key dimension = OVERWORLD;
@@ -77,7 +81,7 @@ public final class World {
     private boolean frozen;
     private int tickingSteps;
 
-    public World(Player owner) {
+    public World(@NotNull Player owner) {
         this.owner = owner;
         this.minecraftData = Decoder.instance();
     }
@@ -107,6 +111,133 @@ public final class World {
 
     public Entity entity(int id) {
         return entities.get(id);
+    }
+
+    public Optional<Entity> mountCandidate(Player player, Vector3d target, boolean coordinate) {
+        AABB search = player.boundingBox().inflate(3.0, 1.0, 3.0);
+        return entities.values().stream()
+                .filter(entity -> entity != player && entity != player.vehicle())
+                .filter(Entity::isCarpetRideable)
+                .filter(entity -> coordinate || search.intersects(entity.boundingBox()))
+                .min((left, right) -> {
+                    double leftDistance = left.boundingBox().center().distanceSquared(target);
+                    double rightDistance = right.boundingBox().center().distanceSquared(target);
+                    int distance = Double.compare(leftDistance, rightDistance);
+                    return distance != 0 ? distance : Integer.compare(left.id(), right.id());
+                });
+    }
+
+    public Optional<InteractionHit> raycast(
+            Player player,
+            double minimumEntityRange,
+            double blockRange,
+            double entityRange,
+            double hitboxMargin) {
+        Vector3d eye = player.position().add(0.0, player.eyeHeight(), 0.0);
+        double maximumRange = Math.max(blockRange, entityRange);
+        double yaw = Math.toRadians(player.yaw());
+        double pitch = Math.toRadians(player.pitch());
+        Vector3d direction = Vector3d.from(
+                -Math.sin(yaw) * Math.cos(pitch),
+                -Math.sin(pitch),
+                Math.cos(yaw) * Math.cos(pitch));
+        Vector3d end = eye.add(direction.mul(maximumRange));
+        Vector3d entityStart = eye.add(direction.mul(minimumEntityRange));
+
+        InteractionHit.BlockHit blockHit = null;
+        double blockDistance = maximumRange * maximumRange;
+        for (int x = floor(Math.min(eye.getX(), end.getX())) - 1;
+                x <= floor(Math.max(eye.getX(), end.getX())) + 1; x++) {
+            for (int y = floor(Math.min(eye.getY(), end.getY())) - 1;
+                    y <= floor(Math.max(eye.getY(), end.getY())) + 1; y++) {
+                for (int z = floor(Math.min(eye.getZ(), end.getZ())) - 1;
+                        z <= floor(Math.max(eye.getZ(), end.getZ())) + 1; z++) {
+                    OptionalInt state = blockState(x, y, z);
+                    if (state.isEmpty()) {
+                        continue;
+                    }
+                    Block block = minecraftData.block(state.getAsInt());
+                    for (AABB local : minecraftData.outlineShape(block.outlineShapeId())) {
+                        AABB box = local.move(x, y, z);
+                        var clipped = box.clip(eye, end);
+                        if (clipped.isEmpty()) {
+                            continue;
+                        }
+                        Vector3d point = clipped.get().left();
+                        double distance = point.distanceSquared(eye);
+                        if (distance < blockDistance) {
+                            blockDistance = distance;
+                            blockHit = new InteractionHit.BlockHit(
+                                    Vector3i.from(x, y, z), clipped.get().right(), point,
+                                    Math.sqrt(distance), box.contains(eye), insideWorldBorder(x, z));
+                        }
+                    }
+                }
+            }
+        }
+
+        InteractionHit.EntityHit entityHit = null;
+        double entityDistance = blockHit == null ? maximumRange * maximumRange : blockDistance;
+        Vector3d entityOffset = entityStart.sub(eye);
+        AABB swept = player.boundingBox()
+                .move(entityOffset.getX(), entityOffset.getY(), entityOffset.getZ())
+                .expand(
+                        direction.getX() * (maximumRange - minimumEntityRange),
+                        direction.getY() * (maximumRange - minimumEntityRange),
+                        direction.getZ() * (maximumRange - minimumEntityRange))
+                .inflate(1.0);
+        for (Entity entity : entities.values()) {
+            if (entity == player || entity == player.vehicle() || !entity.isPickable()
+                    || !swept.intersects(entity.boundingBox().inflate(entity.pickRadius() + hitboxMargin))) {
+                continue;
+            }
+            AABB box = entity.boundingBox().inflate(entity.pickRadius() + hitboxMargin);
+            Vector3d point;
+            if (box.contains(entityStart)) {
+                point = entityStart;
+            } else {
+                var clipped = box.clip(entityStart, end);
+                if (clipped.isEmpty()) {
+                    continue;
+                }
+                point = clipped.get().left();
+            }
+            double distance = point.distanceSquared(eye);
+            if (distance < entityDistance) {
+                entityDistance = distance;
+                entityHit = new InteractionHit.EntityHit(entity, point, Math.sqrt(distance));
+            }
+        }
+        if (entityHit != null && entityDistance < entityRange * entityRange) {
+            return Optional.of(entityHit);
+        }
+        if (blockHit != null && blockDistance < blockRange * blockRange) {
+            return Optional.of(blockHit);
+        }
+        return Optional.empty();
+    }
+
+    public boolean blockTagContains(Key tag, int blockId) {
+        return blockTags.getOrDefault(tag, Set.of()).contains(blockId);
+    }
+
+    public boolean insideWorldBorder(int x, int z) {
+        double half = borderSize / 2.0;
+        return x + 1.0 > borderCenterX - half && x < borderCenterX + half
+                && z + 1.0 > borderCenterZ - half && z < borderCenterZ + half;
+    }
+
+    public Block block(Vector3i position) {
+        OptionalInt state = blockState(position.getX(), position.getY(), position.getZ());
+        return state.isEmpty() ? null : minecraftData.block(state.getAsInt());
+    }
+
+    public boolean eyesInWater(Player player) {
+        OptionalInt state = blockState(
+                floor(player.position().getX()),
+                floor(player.position().getY() + player.eyeHeight()),
+                floor(player.position().getZ()));
+        return state.isPresent() && minecraftData.block(state.getAsInt()).water();
     }
 
     public void removeEntities(int[] entityIds) {
@@ -201,7 +332,7 @@ public final class World {
                             boxes.add(blockBox);
                         }
                     }
-                    for (AABB local : minecraftData.shape(block.shapeId())) {
+                    for (AABB local : minecraftData.shape(block.collisionShapeId())) {
                         AABB blockBox = local.move(x, y, z);
                         if (query.intersects(blockBox)) {
                             boxes.add(blockBox);
@@ -447,7 +578,7 @@ public final class World {
                     if (block.stateKey().startsWith("minecraft:lily_pad")) {
                         continue;
                     }
-                    for (AABB shape : minecraftData.shape(block.shapeId())) {
+                    for (AABB shape : minecraftData.shape(block.collisionShapeId())) {
                         if (contact.intersects(shape.move(x, y, z))) {
                             friction += block.friction();
                             count++;
@@ -528,6 +659,19 @@ public final class World {
     public void physicalTags(Map<Key, Map<Key, int[]>> tags) {
         Map<Key, int[]> blockTags = tags.get(BLOCK_REGISTRY);
         int[] climbable = blockTags == null ? null : blockTags.get(CLIMBABLE_TAG);
+        if (blockTags == null) {
+            this.blockTags = Map.of();
+        } else {
+            Map<Key, Set<Integer>> copied = new HashMap<>();
+            blockTags.forEach((key, values) -> {
+                Set<Integer> ids = new HashSet<>();
+                for (int value : values) {
+                    ids.add(value);
+                }
+                copied.put(key, Set.copyOf(ids));
+            });
+            this.blockTags = Map.copyOf(copied);
+        }
         if (climbable == null) {
             climbableBlockIds = Set.of();
         } else {
@@ -599,6 +743,9 @@ public final class World {
     }
 
     public void select(PlayerSpawnInfo spawnInfo) {
+        if (spawnInfo == null || spawnInfo.getWorldName() == null) {
+            return;
+        }
         Key nextDimension = spawnInfo.getWorldName();
         if (!nextDimension.equals(dimension)) {
             clearDimensionState();
@@ -633,6 +780,7 @@ public final class World {
         clearDimensionState();
         dimensionTypes = List.of();
         climbableBlockIds = Set.of();
+        blockTags = Map.of();
         physicalTagsReceived = false;
         dimension = OVERWORLD;
         selectedDimensionId = -1;
@@ -1030,7 +1178,7 @@ public final class World {
             }
             double penetration = 0.0;
             AABB entityBox = entity.boundingBox();
-            for (AABB local : minecraftData.shape(minecraftData.block(collisionState).shapeId())) {
+            for (AABB local : minecraftData.shape(minecraftData.block(collisionState).collisionShapeId())) {
                 AABB current = local.move(
                         piston.position().getX() + pistonOffset.getX(),
                         piston.position().getY() + pistonOffset.getY(),
@@ -1096,7 +1244,7 @@ public final class World {
                 || piston.movementDirection() == Direction.DOWN) {
             return;
         }
-        AABB[] shapes = minecraftData.shape(minecraftData.block(piston.movedState()).shapeId());
+        AABB[] shapes = minecraftData.shape(minecraftData.block(piston.movedState()).collisionShapeId());
         double top = 0.0;
         for (AABB shape : shapes) {
             top = Math.max(top, shape.maxY());
@@ -1160,7 +1308,7 @@ public final class World {
             return;
         }
         Block block = minecraftData.block(stateId);
-        for (AABB local : minecraftData.shape(block.shapeId())) {
+        for (AABB local : minecraftData.shape(block.collisionShapeId())) {
             AABB box = local.move(
                     position.getX() + offset.getX(),
                     position.getY() + offset.getY(),
@@ -1226,7 +1374,7 @@ public final class World {
             if (sameFluid(current, neighbor)) {
                 difference = currentHeight - fluidHeight(neighbor);
             } else if (!neighbor.water() && !neighbor.lava()
-                    && minecraftData.shape(neighbor.shapeId()).length == 0) {
+                    && minecraftData.shape(neighbor.collisionShapeId()).length == 0) {
                 Block below = minecraftData.block(
                         blockState(nextX, y - 1, nextZ).orElseThrow());
                 difference = sameFluid(current, below)
@@ -1315,21 +1463,22 @@ public final class World {
         return ((long) x << 32) | (z & 0xffffffffL);
     }
 
-    public record FluidSample(double waterHeight, double lavaHeight, Vector3d flow) {
+    public record FluidSample(double waterHeight, double lavaHeight, @NotNull Vector3d flow) {
         private static final FluidSample EMPTY = new FluidSample(0.0, 0.0, Vector3d.ZERO);
     }
 
-    public record BoatEnvironment(Vehicle.BoatStatus status, double waterLevel, float landFriction) {
+    public record BoatEnvironment(
+            @NotNull Vehicle.BoatStatus status, double waterLevel, float landFriction) {
     }
 
-    public record BlockSample(int x, int y, int z, Block block) {
+    public record BlockSample(int x, int y, int z, @NotNull Block block) {
     }
 
     public record LevelChunkInstallResult(
-            boolean installed, String detail, Optional<RuntimeException> cause) {
+            boolean installed,
+            @NotNull String detail,
+            @NotNull Optional<RuntimeException> cause) {
         public LevelChunkInstallResult {
-            Objects.requireNonNull(detail, "detail");
-            Objects.requireNonNull(cause, "cause");
             if (installed && (!detail.isEmpty() || cause.isPresent())) {
                 throw new IllegalArgumentException(
                         "An installed LevelChunk result cannot contain failure detail or a cause.");
@@ -1353,6 +1502,8 @@ public final class World {
         }
     }
 
+    @Getter(AccessLevel.PRIVATE)
+    @Accessors(fluent = true)
     private static final class MovingPiston {
         private final Vector3i position;
         private final int movedState;
@@ -1376,18 +1527,6 @@ public final class World {
             this.progress = Math.clamp(progress, 0.0f, 1.0f);
         }
 
-        private Vector3i position() {
-            return position;
-        }
-
-        private int movedState() {
-            return movedState;
-        }
-
-        private Direction direction() {
-            return direction;
-        }
-
         private Direction movementDirection() {
             if (extending) {
                 return direction;
@@ -1400,18 +1539,6 @@ public final class World {
                 case WEST -> Direction.EAST;
                 case EAST -> Direction.WEST;
             };
-        }
-
-        private boolean source() {
-            return source;
-        }
-
-        private boolean extending() {
-            return extending;
-        }
-
-        private float progress() {
-            return progress;
         }
 
         private float tick() {

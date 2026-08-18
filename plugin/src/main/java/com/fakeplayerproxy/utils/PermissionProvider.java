@@ -24,13 +24,13 @@ import java.util.HashSet;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
-import java.util.Objects;
 import java.util.Optional;
 import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.Executor;
 import java.util.concurrent.Executors;
+import org.jetbrains.annotations.NotNull;
 
 /** Owns the persistent FPP operator snapshot and its Velocity permission behavior. */
 public final class PermissionProvider implements AutoCloseable {
@@ -46,15 +46,15 @@ public final class PermissionProvider implements AutoCloseable {
     private final Executor executor;
     private volatile Map<UUID, String> operators = Map.of();
 
-    public PermissionProvider(Path dataDirectory) {
+    public PermissionProvider(@NotNull Path dataDirectory) {
         this(dataDirectory, Executors.newSingleThreadExecutor(
                 Thread.ofPlatform().daemon().name("fakeplayerproxy-config").factory()));
     }
 
-    PermissionProvider(Path dataDirectory, Executor executor) {
-        this.dataDirectory = Objects.requireNonNull(dataDirectory, "dataDirectory");
+    PermissionProvider(@NotNull Path dataDirectory, @NotNull Executor executor) {
+        this.dataDirectory = dataDirectory;
         this.file = dataDirectory.resolve(FILE_NAME);
-        this.executor = Objects.requireNonNull(executor, "executor");
+        this.executor = executor;
     }
 
     public Result<Void, String> load() {
@@ -125,7 +125,10 @@ public final class PermissionProvider implements AutoCloseable {
     }
 
     public CompletableFuture<Result<String, String>> grant(Player player) {
-        Objects.requireNonNull(player, "player");
+        if (player == null) {
+            return CompletableFuture.completedFuture(new Result.Failure<>(
+                    "Cannot grant operator access without a Velocity player."));
+        }
         UUID uuid = player.getUniqueId();
         String name = player.getUsername();
         return CompletableFuture.supplyAsync(() -> {
@@ -141,8 +144,7 @@ public final class PermissionProvider implements AutoCloseable {
         }, executor);
     }
 
-    public CompletableFuture<Result<Optional<String>, String>> revoke(String name) {
-        Objects.requireNonNull(name, "name");
+    public CompletableFuture<Result<Optional<String>, String>> revoke(@NotNull String name) {
         return CompletableFuture.supplyAsync(() -> {
             var removed = operators.entrySet().stream()
                     .filter(entry -> entry.getValue().equalsIgnoreCase(name))

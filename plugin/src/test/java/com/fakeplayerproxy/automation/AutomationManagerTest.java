@@ -6,14 +6,17 @@ import static org.junit.jupiter.api.Assertions.assertNotSame;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertSame;
+import static org.junit.jupiter.api.Assertions.assertInstanceOf;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
+import static org.mockito.Mockito.doThrow;
 
 import com.velocitypowered.proxy.connection.MinecraftConnection;
+import com.fakeplayerproxy.utils.Result;
 import com.velocitypowered.proxy.connection.backend.VelocityServerConnection;
 import com.velocitypowered.proxy.connection.client.ConnectedPlayer;
 import io.netty.channel.Channel;
@@ -26,7 +29,8 @@ import org.junit.jupiter.api.Test;
 import org.slf4j.Logger;
 
 final class AutomationManagerTest {
-    private final AutomationManager manager = new AutomationManager(mock(Logger.class));
+    private final Logger logger = mock(Logger.class);
+    private final AutomationManager manager = new AutomationManager(logger);
 
     @Test
     void doesNotRegisterAPlayerWithoutTheRelayedBackend() {
@@ -70,13 +74,13 @@ final class AutomationManagerTest {
     }
 
     @Test
-    void nameLookupIsCaseInsensitiveAndExcludesInactivePlayers() {
+    void nameLookupIsCaseInsensitiveAndSuggestionsRequireShadow() {
         ConnectedPlayer player = player(UUID.randomUUID(), true);
         when(player.getUsername()).thenReturn("ShadowPlayer");
         manager.register(player).join();
 
         assertSame(manager.get(player), manager.getByName("shadowplayer"));
-        assertEquals(java.util.List.of("ShadowPlayer"), manager.names());
+        assertEquals(java.util.List.of(), manager.names());
 
         MinecraftConnection backend = player
                 .getConnectionInFlightOrConnectedServer()
@@ -84,6 +88,43 @@ final class AutomationManagerTest {
         when(backend.getChannel().isActive()).thenReturn(false);
         assertNull(manager.getByName("ShadowPlayer"));
         assertEquals(java.util.List.of(), manager.names());
+    }
+
+    @Test
+    void killRejectsANonShadowPlayerWithoutRemovingOrClosingIt() {
+        ConnectedPlayer velocityPlayer = player(UUID.randomUUID(), true);
+        manager.register(velocityPlayer).join();
+        com.fakeplayerproxy.world.player.Player player = manager.get(velocityPlayer);
+        MinecraftConnection backend = velocityPlayer
+                .getConnectionInFlightOrConnectedServer()
+                .getConnection();
+
+        Result<Void, String> result = manager.kill(player);
+
+        assertInstanceOf(Result.Failure.class, result);
+        assertSame(player, manager.get(velocityPlayer));
+        verify(backend, never()).close();
+    }
+
+    @Test
+    void tickTaskSetupFailureRefusesAndClosesTheAutomation() {
+        ConnectedPlayer player = player(UUID.randomUUID(), true);
+        when(player.getUsername()).thenReturn("SetupFailure");
+        EventLoop eventLoop = player.getConnection().eventLoop();
+        doThrow(new IllegalStateException("schedule failed")).when(eventLoop).scheduleAtFixedRate(
+                any(Runnable.class), anyLong(), anyLong(), any(TimeUnit.class));
+        MinecraftConnection backend = player
+                .getConnectionInFlightOrConnectedServer()
+                .getConnection();
+
+        manager.register(player).join();
+
+        assertNull(manager.get(player));
+        verify(backend).close();
+        verify(logger).error(
+                org.mockito.ArgumentMatchers.contains("Cannot schedule automation ticks"),
+                org.mockito.ArgumentMatchers.eq("SetupFailure"),
+                any(IllegalStateException.class));
     }
 
     private static ConnectedPlayer player(UUID uuid, boolean backendActive) {

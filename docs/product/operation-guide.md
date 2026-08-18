@@ -61,14 +61,39 @@ Use an explicit console `/fpp op` command to replace it with a valid snapshot.
 
 ## Commands
 
-The connected relay player can hand its own connection to automation:
+The connected relay player can control its own automation connection. Operators
+can place the same action after `/player as <player>`:
 
 ```text
+/player stop
+/player use [once|continuous|interval <ticks>]
+/player jump [once|continuous|interval <ticks>]
+/player attack [once|continuous|interval <ticks>]
+/player drop [once|continuous|interval <ticks>|all|mainhand|offhand|<slot>]
+/player dropStack [once|continuous|interval <ticks>|all|mainhand|offhand|<slot>]
+/player swapHands [once|continuous|interval <ticks>]
+/player hotbar <slot>
+/player kill
 /player shadow
+/player mount [<x> <y> <z>]
+/player dismount
+/player sneak
+/player unsneak
+/player sprint
+/player unsprint
+/player look <north|south|east|west|up|down>
+/player look <yaw> <pitch>
+/player look at <x> <y> <z>
+/player turn <left|right|back>
+/player turn <yaw-delta> <pitch-delta>
+/player move [forward|backward|left|right]
 ```
 
-The frontend closes while the original backend remains active. An operator can
-target an active automation player by authenticated name:
+`shadow` closes the frontend while the original backend remains active. A mount
+or look position accepts absolute coordinates, `~` relative coordinates, and
+`^` local coordinates resolved from the target fake player.
+
+An operator targets an active automation player by authenticated name:
 
 ```text
 /player as <player> shadow
@@ -92,10 +117,10 @@ without that permission.
 
 ## Known Limits
 
-- This command layer currently exposes only the `shadow` action. Later action
-  work extends the same direct and targeted command branches.
 - Automation is local to one proxy process.
 - The target must still have an active original backend connection.
 - Operator state is not imported from backend `ops.json` files or another
   permission plugin.
-- Full Carpet `/player` parity remains out of scope.
+- Server-only Carpet branches, including `spawn` and `mount anything`, are not
+  registered. Local interaction prediction intentionally declines untracked
+  block, entity, item-subclass, data-pack, and backend-plugin behavior.

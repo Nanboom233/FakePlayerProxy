@@ -31,6 +31,8 @@ private fun generateResources(sourceDirectory: Path, resourceDirectory: Path) {
     val collisionShapes = collisionData.getAsJsonObject("shapes")
     val collisionBlocks = collisionData.getAsJsonObject("blocks")
     val shapeIds = collisionShapes.keySet().map(String::toInt).sorted()
+    val outlineShapes = mutableListOf<JsonArray>()
+    val outlineShapeIds = mutableMapOf<String, Int>()
 
     shapeIds.forEachIndexed { index, shapeId ->
         check(shapeId == index) {
@@ -66,6 +68,18 @@ private fun generateResources(sourceDirectory: Path, resourceDirectory: Path) {
                 error("Block state $stateId references missing collision shape $shapeId")
             }
             val physics = physicsStates[offset].asJsonObject
+            val outlineBoxes = physics.get("outlineBoxes")?.arrayOrNull()
+            if (outlineBoxes == null || outlineBoxes.any {
+                    it.arrayOrNull()?.let { box ->
+                        box.size() != 6 || box.any { value -> value.finiteDoubleOrNull() == null }
+                    } != false
+                }) {
+                error("Block state $stateId has invalid outline boxes")
+            }
+            val outlineShapeId = outlineShapeIds.getOrPut(outlineBoxes.toString()) {
+                outlineShapes.add(outlineBoxes)
+                outlineShapes.lastIndex
+            }
             val shapeBoxes = collisionShapes.getAsJsonArray(shapeId.toString())
             val fluidFaceMask = physics.get("fluidFaceMask").integerOrNull()
                 ?: deriveFluidFaceMask(blockName, shapeBoxes)
@@ -76,16 +90,20 @@ private fun generateResources(sourceDirectory: Path, resourceDirectory: Path) {
             val fluidAmount = physics.get("fluidAmount").integerOrNull()
             val scaffoldingDistance = physics.get("scaffoldingDistance").integerOrNull()
             val scaffoldingBottom = physics.get("scaffoldingBottom").booleanOrNull()
+            val destroySpeed = physics.get("destroySpeed").finiteDoubleOrNull()
+            val requiresCorrectTool = physics.get("requiresCorrectToolForDrops").booleanOrNull()
             if (friction == null || speedFactor == null || bounciness == null
                 || stateKey == null || fluidAmount == null || fluidAmount !in 0..9
                 || scaffoldingDistance == null || scaffoldingDistance !in 0..7
                 || scaffoldingBottom == null || fluidFaceMask !in 0..0x3f
+                || destroySpeed == null || requiresCorrectTool == null
             ) {
                 error("Block state $stateId has invalid physics values")
             }
             val behaviorKind = blockBehavior(blockName, physics.get("climbable").booleanOrNull() == true)
             states[stateId] = BlockState(
                 shapeId = shapeId,
+                outlineShapeId = outlineShapeId,
                 stateKey = stateKey,
                 blockId = block.get("id").asInt,
                 friction = friction,
@@ -105,6 +123,8 @@ private fun generateResources(sourceDirectory: Path, resourceDirectory: Path) {
                     0
                 },
                 fluidFaceMask = fluidFaceMask,
+                destroySpeed = destroySpeed,
+                requiresCorrectTool = requiresCorrectTool,
             )
         }
     }
@@ -131,6 +151,8 @@ private fun generateResources(sourceDirectory: Path, resourceDirectory: Path) {
             ?: defaultMovementCollision(entityName)
         val pistonReaction = entity.get("pistonReaction").integerOrNull()
             ?: defaultPistonReaction(entityName)
+        val pickable = entity.get("pickable").booleanOrNull()
+        val pickRadius = entity.get("pickRadius").finiteDoubleOrNull()
         val attributes = entity.get("movementAttributes")?.objectOrNull()
         if (living && (attributes == null || attributes.entrySet().any { it.value.finiteDoubleOrNull() == null })) {
             error("Living entity $entityName has incomplete movement attribute defaults")
@@ -164,16 +186,17 @@ private fun generateResources(sourceDirectory: Path, resourceDirectory: Path) {
         val defaultHealth = metadataDefaults.get("health").finiteDoubleOrNull()
         if (poses.isEmpty() || sharedFlags == null || defaultPose == null || defaultPose !in poses.indices
             || noGravity == null || defaultHealth == null || pistonReaction !in 0..1
+            || pickable == null || pickRadius == null || pickRadius < 0.0
         ) {
             error("Entity $entityName has invalid metadata defaults")
         }
         val metadataIds = listOf(
-            "sharedFlags", "noGravity", "pose", "health", "horseFlags", "steeringBoost",
+            "sharedFlags", "noGravity", "pose", "health", "livingFlags", "horseFlags", "steeringBoost",
             "striderSuffocating", "camelLastPoseChangeTick", "happyGhastStaysStill",
         ).map { metadataSchema.get(it).integerOrNull() }
         if (metadataIds.any { it == null || it !in -1..254 }
             || metadataIds[0]!! < 0 || metadataIds[1]!! < 0 || metadataIds[2]!! < 0
-            || living && metadataIds[3]!! < 0
+            || living && (metadataIds[3]!! < 0 || metadataIds[4]!! < 0)
         ) {
             error("Entity $entityName has invalid metadata schema")
         }
@@ -186,6 +209,8 @@ private fun generateResources(sourceDirectory: Path, resourceDirectory: Path) {
                     or (if (noGravity) 4 else 0)
                     or (if (movementCollision) 8 else 0),
             pistonReaction = pistonReaction,
+            pickable = pickable,
+            pickRadius = pickRadius,
             sharedFlags = sharedFlags,
             defaultPose = defaultPose,
             defaultHealth = defaultHealth,
@@ -201,6 +226,25 @@ private fun generateResources(sourceDirectory: Path, resourceDirectory: Path) {
     }
     val missingEntity = entities.indexOfFirst { it == null }
     check(missingEntity == -1) { "Missing entity protocol id $missingEntity" }
+
+    val itemCount = itemData.maxOf { it.asJsonObject.get("id").asInt } + 1
+    val items = arrayOfNulls<JsonObject>(itemCount)
+    for (itemElement in itemData) {
+        val item = itemElement.asJsonObject
+        val id = item.get("id").integerOrNull()
+        val registryKey = item.get("registryKey").stringOrNull()
+        val requiredFeatures = item.get("requiredFeatures")?.arrayOrNull()
+        if (id == null || id !in items.indices || items[id] != null || registryKey == null
+            || requiredFeatures == null || requiredFeatures.any { it.stringOrNull() == null }
+            || item.get("baseUse").booleanOrNull() == null
+            || item.get("blocksAttacks").booleanOrNull() == null
+            || item.get("kineticWeapon").booleanOrNull() == null
+        ) {
+            error("Item ${item.get("name")} has invalid fixed interaction data")
+        }
+        items[id] = item
+    }
+    check(items.none { it == null }) { "Fixed item ids are not contiguous" }
 
     fun itemId(name: String): Int {
         val item = itemData.firstOrNull { it.asJsonObject.get("name").asString == name }?.asJsonObject
@@ -224,7 +268,9 @@ private fun generateResources(sourceDirectory: Path, resourceDirectory: Path) {
         DataOutputStream(bytes).use { output ->
             output.writeInt(states.size)
             output.writeInt(shapeIds.size)
+            output.writeInt(outlineShapes.size)
             output.writeInt(entities.size)
+            output.writeInt(items.size)
             output.writeInt(leatherBootsItemId)
             output.writeInt(elytraItemId)
             output.writeInt(saddleItemId)
@@ -233,18 +279,69 @@ private fun generateResources(sourceDirectory: Path, resourceDirectory: Path) {
             output.writeShort(harnessItemIds.size)
             harnessItemIds.forEach { output.writeInt(it!!) }
 
-            for (shapeId in shapeIds) {
-                val boxes = collisionShapes.get(shapeId.toString()).arrayOrNull()
-                if (boxes == null || boxes.size() > 0xffff) {
-                    error("Collision shape $shapeId has invalid boxes")
-                }
-                output.writeShort(boxes.size())
-                for (boxElement in boxes) {
-                    val box = boxElement.arrayOrNull()
-                    if (box == null || box.size() != 6 || box.any { it.finiteDoubleOrNull() == null }) {
-                        error("Collision shape $shapeId has an invalid AABB")
+            shapeIds.forEach { shapeId -> output.writeShape(
+                collisionShapes.get(shapeId.toString()).arrayOrNull()
+                    ?: error("Collision shape $shapeId has invalid boxes"), "Collision shape $shapeId") }
+            outlineShapes.forEachIndexed { id, boxes -> output.writeShape(boxes, "Outline shape $id") }
+
+            for (item in items) {
+                item!!
+                output.writeText(item.get("registryKey").asString)
+                val features = item.getAsJsonArray("requiredFeatures")
+                check(features.size() <= 0xffff) { "Item feature list is too large" }
+                output.writeShort(features.size())
+                features.forEach { output.writeText(it.asString) }
+                var flags = if (item.get("baseUse").asBoolean) 1 else 0
+                if (item.get("blocksAttacks").asBoolean) flags = flags or 2
+                if (item.get("kineticWeapon").asBoolean) flags = flags or 4
+                val food = item.get("food")?.objectOrNull()
+                val consumeSeconds = item.get("consumeSeconds").finiteDoubleOrNull()
+                val cooldownGroup = item.get("cooldownGroup").stringOrNull()
+                val tool = item.get("tool")?.objectOrNull()
+                val attackRange = item.get("attackRange")?.arrayOrNull()
+                if (food != null) flags = flags or 8
+                if (consumeSeconds != null) flags = flags or 16
+                if (cooldownGroup != null) flags = flags or 32
+                if (tool != null) flags = flags or 64
+                if (attackRange != null) flags = flags or 128
+                output.write(flags)
+                if (food != null) output.writeBoolean(food.get("canAlwaysEat").booleanOrNull()
+                    ?: error("Item food has invalid canAlwaysEat"))
+                if (consumeSeconds != null) output.writeFloat(consumeSeconds.toFloat())
+                if (cooldownGroup != null) output.writeText(cooldownGroup)
+                if (tool != null) {
+                    val defaultSpeed = tool.get("defaultMiningSpeed").finiteDoubleOrNull()
+                        ?: error("Item tool has invalid default speed")
+                    val rules = tool.get("rules")?.arrayOrNull() ?: error("Item tool has invalid rules")
+                    check(rules.size() <= 0xffff) { "Item tool has too many rules" }
+                    output.writeFloat(defaultSpeed.toFloat())
+                    output.writeShort(rules.size())
+                    for (ruleElement in rules) {
+                        val rule = ruleElement.objectOrNull() ?: error("Item tool rule is not an object")
+                        val tag = rule.get("tag").stringOrNull()
+                        val blocks = rule.get("blocks")?.arrayOrNull()
+                        check((tag == null) != (blocks == null)) { "Item tool rule holder is invalid" }
+                        output.writeBoolean(tag != null)
+                        if (tag != null) output.writeText(tag) else {
+                            check(blocks!!.size() <= 0xffff && blocks.all { it.stringOrNull() != null }) {
+                                "Item tool rule blocks are invalid"
+                            }
+                            output.writeShort(blocks.size())
+                            blocks.forEach { output.writeText(it.asString) }
+                        }
+                        val speed = rule.get("speed").finiteDoubleOrNull()
+                        val correct = rule.get("correctForDrops").booleanOrNull()
+                        output.writeBoolean(speed != null)
+                        if (speed != null) output.writeFloat(speed.toFloat())
+                        output.writeBoolean(correct != null)
+                        if (correct != null) output.writeBoolean(correct)
                     }
-                    box.forEach { output.writeFloat(it.asDouble.toFloat()) }
+                }
+                if (attackRange != null) {
+                    check(attackRange.size() == 6 && attackRange.all { it.finiteDoubleOrNull() != null }) {
+                        "Item attack range is invalid"
+                    }
+                    attackRange.forEach { output.writeFloat(it.asFloat) }
                 }
             }
 
@@ -252,6 +349,7 @@ private fun generateResources(sourceDirectory: Path, resourceDirectory: Path) {
                 state!!
                 output.writeText(state.stateKey)
                 output.writeInt(state.shapeId)
+                output.writeInt(state.outlineShapeId)
                 output.writeInt(state.blockId)
                 output.writeFloat(state.friction.toFloat())
                 output.writeFloat(state.speedFactor.toFloat())
@@ -261,6 +359,8 @@ private fun generateResources(sourceDirectory: Path, resourceDirectory: Path) {
                 output.write(state.behaviorKind)
                 output.write(state.behaviorParameter)
                 output.write(state.fluidFaceMask)
+                output.writeFloat(state.destroySpeed.toFloat())
+                output.writeBoolean(state.requiresCorrectTool)
             }
 
             for (entity in entities) {
@@ -268,6 +368,8 @@ private fun generateResources(sourceDirectory: Path, resourceDirectory: Path) {
                 output.writeInt(entity.id)
                 output.write(entity.movementKind)
                 output.write(entity.flags)
+                output.writeBoolean(entity.pickable)
+                output.writeFloat(entity.pickRadius.toFloat())
                 output.write(entity.pistonReaction)
                 output.write(entity.sharedFlags)
                 output.write(entity.defaultPose)
@@ -400,6 +502,18 @@ private fun DataOutputStream.writeText(value: String) {
     write(bytes)
 }
 
+private fun DataOutputStream.writeShape(boxes: JsonArray, name: String) {
+    check(boxes.size() <= 0xffff) { "$name has too many boxes" }
+    writeShort(boxes.size())
+    for (boxElement in boxes) {
+        val box = boxElement.arrayOrNull()
+        check(box != null && box.size() == 6 && box.all { it.finiteDoubleOrNull() != null }) {
+            "$name has an invalid AABB"
+        }
+        box.forEach { writeFloat(it.asFloat) }
+    }
+}
+
 private fun JsonElement?.arrayOrNull(): JsonArray? =
     if (this != null && isJsonArray) asJsonArray else null
 
@@ -434,6 +548,7 @@ private fun JsonElement.vectorDouble(): DoubleArray =
 
 private data class BlockState(
     val shapeId: Int,
+    val outlineShapeId: Int,
     val stateKey: String,
     val blockId: Int,
     val friction: Double,
@@ -444,6 +559,8 @@ private data class BlockState(
     val behaviorKind: Int,
     val behaviorParameter: Int,
     val fluidFaceMask: Int,
+    val destroySpeed: Double,
+    val requiresCorrectTool: Boolean,
 )
 
 private data class EntityPose(
@@ -487,6 +604,8 @@ private data class EntityDefinition(
     val movementKind: Int,
     val flags: Int,
     val pistonReaction: Int,
+    val pickable: Boolean,
+    val pickRadius: Double,
     val sharedFlags: Int,
     val defaultPose: Int,
     val defaultHealth: Double,

@@ -3,6 +3,7 @@ package com.fakeplayerproxy.world.data;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertInstanceOf;
 import static org.junit.jupiter.api.Assertions.assertSame;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import java.util.List;
 
@@ -10,8 +11,21 @@ import net.kyori.adventure.key.Key;
 import org.cloudburstmc.nbt.NbtMap;
 import org.geysermc.mcprotocollib.protocol.data.game.RegistryEntry;
 import org.junit.jupiter.api.Test;
+import org.geysermc.mcprotocollib.protocol.data.game.entity.type.EntityType;
 
 final class DecoderTest {
+    @Test
+    void decodesInteractionBlockItemAndEntityData() {
+        Decoder data = Decoder.instance();
+        Block stone = data.block(data.blockState("minecraft:stone"));
+
+        assertEquals(1.5f, stone.destroySpeed());
+        assertTrue(stone.requiresCorrectToolForDrops());
+        assertEquals(1, data.outlineShape(stone.outlineShapeId()).length);
+        assertEquals(Key.key("minecraft", "saddle"), data.item(data.saddleItemId()).registryKey());
+        assertTrue(data.entity(EntityType.OAK_BOAT).pickable());
+    }
+
     @Test
     void resolvesOnlyNullDimensionEntriesAndPreservesServerOrder() {
         Decoder data = Decoder.instance();

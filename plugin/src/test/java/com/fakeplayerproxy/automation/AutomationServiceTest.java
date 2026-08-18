@@ -2,6 +2,7 @@ package com.fakeplayerproxy.automation;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertInstanceOf;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.argThat;
@@ -12,6 +13,8 @@ import static org.mockito.Mockito.clearInvocations;
 import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
+import static org.mockito.Mockito.doReturn;
+import static org.mockito.Mockito.inOrder;
 
 import com.fakeplayerproxy.utils.Result;
 import com.fakeplayerproxy.world.data.Decoder;
@@ -38,6 +41,7 @@ import org.geysermc.mcprotocollib.protocol.data.game.RegistryEntry;
 import org.geysermc.mcprotocollib.protocol.data.game.chunk.ChunkSection;
 import org.geysermc.mcprotocollib.protocol.data.game.entity.player.GameMode;
 import org.geysermc.mcprotocollib.protocol.data.game.entity.player.PlayerSpawnInfo;
+import org.geysermc.mcprotocollib.protocol.data.game.entity.player.PlayerState;
 import org.geysermc.mcprotocollib.protocol.data.game.entity.player.PositionElement;
 import org.geysermc.mcprotocollib.protocol.data.game.entity.type.EntityType;
 import org.geysermc.mcprotocollib.protocol.data.game.level.block.BlockEntityInfo;
@@ -49,10 +53,15 @@ import org.geysermc.mcprotocollib.protocol.packet.ingame.serverbound.level.Serve
 import org.geysermc.mcprotocollib.protocol.packet.ingame.serverbound.player.ServerboundMovePlayerPosPacket;
 import org.geysermc.mcprotocollib.protocol.packet.ingame.serverbound.player.ServerboundMovePlayerPosRotPacket;
 import org.geysermc.mcprotocollib.protocol.packet.ingame.serverbound.player.ServerboundMovePlayerRotPacket;
+import org.geysermc.mcprotocollib.protocol.packet.ingame.serverbound.player.ServerboundPlayerActionPacket;
+import org.geysermc.mcprotocollib.protocol.packet.ingame.serverbound.player.ServerboundPlayerCommandPacket;
+import org.geysermc.mcprotocollib.protocol.packet.ingame.serverbound.level.ServerboundPlayerInputPacket;
+import org.geysermc.mcprotocollib.protocol.data.game.entity.player.PlayerAction;
 import org.geysermc.mcprotocollib.protocol.packet.configuration.serverbound.ServerboundFinishConfigurationPacket;
 import org.geysermc.mcprotocollib.protocol.packet.configuration.serverbound.ServerboundSelectKnownPacks;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.mockito.InOrder;
 
 final class AutomationServiceTest {
     private final MinecraftConnection backend = mock(MinecraftConnection.class);
@@ -78,6 +87,159 @@ final class AutomationServiceTest {
                 new RegistryEntry(Key.key("minecraft", "plains"), NbtMap.EMPTY)));
         player.initializeGame(17, spawnInfo());
         service.enterGame();
+    }
+
+    @Test
+    void oneShotAndIntervalWaitForTheirActionTicks() {
+        assertInstanceOf(Result.Success.class, service.dropSelectedItem(false, ActionMode.ONCE, 0));
+        verify(backend, never()).sendPacket(argThat(packet -> packet instanceof ServerboundPlayerActionPacket));
+
+        service.tick(backend);
+
+        verify(backend, times(1)).sendPacket(argThat(packet -> packet instanceof ServerboundPlayerActionPacket action
+                && action.getAction() == PlayerAction.DROP_ITEM));
+        clearInvocations(backend);
+        service.dropSelectedItem(false, ActionMode.INTERVAL, 3);
+        service.tick(backend);
+        service.tick(backend);
+        verify(backend, never()).sendPacket(argThat(packet -> packet instanceof ServerboundPlayerActionPacket));
+        service.tick(backend);
+        verify(backend, times(1)).sendPacket(argThat(packet -> packet instanceof ServerboundPlayerActionPacket));
+    }
+
+    @Test
+    void movementCommandsRejectANonShadowOwner() {
+        assertInstanceOf(Result.Failure.class, service.move("forward"));
+        assertInstanceOf(Result.Failure.class, service.jump(ActionMode.ONCE, 0));
+        assertInstanceOf(Result.Failure.class, service.setSprint(true));
+        assertInstanceOf(Result.Failure.class, service.setSprint(false));
+
+        verify(backend, never()).sendPacket(argThat(packet ->
+                packet instanceof ServerboundPlayerInputPacket
+                        || packet instanceof ServerboundPlayerCommandPacket));
+    }
+
+    @Test
+    void intervalOneCleansUpBeforeEveryRunButContinuousDoesNot() {
+        Player owner = mock(Player.class);
+        when(owner.eventLoop()).thenReturn(eventLoop);
+        when(owner.backendConnection()).thenReturn(backend);
+        when(owner.attack(backend, false)).thenReturn(new Result.Success<>(false));
+        when(owner.attack(backend, true)).thenReturn(new Result.Success<>(false));
+        AutomationService scheduler = new AutomationService(owner);
+        scheduler.enterGame();
+
+        scheduler.attack(ActionMode.INTERVAL, 1);
+        scheduler.tick(backend);
+        scheduler.tick(backend);
+        verify(owner, times(2)).inactiveAttack(backend);
+        clearInvocations(owner);
+        scheduler.attack(ActionMode.CONTINUOUS, 0);
+        clearInvocations(owner);
+        scheduler.tick(backend);
+        scheduler.tick(backend);
+        verify(owner, never()).inactiveAttack(backend);
+    }
+
+    @Test
+    void useRunsBeforeAttackAndRetriesAfterSuccessfulAttackAndStopCleansEverything() {
+        Player owner = mock(Player.class);
+        when(owner.eventLoop()).thenReturn(eventLoop);
+        when(owner.backendConnection()).thenReturn(backend);
+        doReturn(new Result.Success<Boolean, String>(false), new Result.Success<Boolean, String>(true))
+                .when(owner).use(backend);
+        when(owner.attack(backend, false)).thenReturn(new Result.Success<>(true));
+        when(owner.stopActions(backend)).thenReturn(new Result.Success<>(null));
+        AutomationService scheduler = new AutomationService(owner);
+        scheduler.enterGame();
+        scheduler.use(ActionMode.ONCE, 0);
+        scheduler.attack(ActionMode.ONCE, 0);
+
+        scheduler.tick(backend);
+
+        InOrder order = inOrder(owner);
+        order.verify(owner).use(backend);
+        order.verify(owner).attack(backend, false);
+        order.verify(owner).use(backend);
+        scheduler.jump(ActionMode.CONTINUOUS, 0);
+        clearInvocations(owner);
+        scheduler.stopActions();
+        verify(owner).inactiveUse(backend);
+        verify(owner).inactiveAttack(backend);
+        verify(owner).inactiveJump(backend);
+        verify(owner).stopActions(backend);
+    }
+
+    @Test
+    void passiveStatePrecedesAttackAndContinuousUseKeepsItsHeldAction() {
+        Player owner = mock(Player.class);
+        when(owner.eventLoop()).thenReturn(eventLoop);
+        when(owner.backendConnection()).thenReturn(backend);
+        when(owner.attack(backend, false)).thenReturn(new Result.Success<>(true));
+        when(owner.use(backend)).thenReturn(new Result.Success<>(true));
+        AutomationService scheduler = new AutomationService(owner);
+        scheduler.enterGame();
+        scheduler.attack(ActionMode.ONCE, 0);
+
+        scheduler.tick(backend);
+
+        InOrder order = inOrder(owner);
+        order.verify(owner).passiveTick();
+        order.verify(owner).attack(backend, false);
+
+        scheduler.use(ActionMode.CONTINUOUS, 0);
+        clearInvocations(owner);
+        scheduler.tick(backend);
+        scheduler.tick(backend);
+
+        verify(owner, times(1)).use(backend);
+        verify(owner, never()).inactiveUse(backend);
+    }
+
+    @Test
+    void continuousUseOwnershipTracksTheScheduledActionLifecycle() {
+        assertFalse(service.ownsContinuousUse());
+
+        service.use(ActionMode.CONTINUOUS, 0);
+        assertTrue(service.ownsContinuousUse());
+
+        service.use(ActionMode.ONCE, 0);
+        assertFalse(service.ownsContinuousUse());
+
+        service.use(ActionMode.CONTINUOUS, 0);
+        service.stopActions();
+        assertFalse(service.ownsContinuousUse());
+
+        service.use(ActionMode.CONTINUOUS, 0);
+        service.startConfiguration();
+        assertFalse(service.ownsContinuousUse());
+
+        service.enterGame();
+        service.use(ActionMode.CONTINUOUS, 0);
+        service.close();
+        assertFalse(service.ownsContinuousUse());
+    }
+
+    @Test
+    void dismountHoldsShiftForOneCompleteServiceTickThenRestoresCurrentInput() {
+        prepareLoadedWorld();
+        player.setInputState(Player.InputState.CLEAR.withMovement("forward"));
+
+        assertInstanceOf(Result.Success.class, service.dismount());
+        verify(backend).sendPacket(argThat(packet ->
+                packet instanceof ServerboundPlayerInputPacket input && input.isShift()));
+        clearInvocations(backend);
+
+        service.tick(backend);
+
+        verify(backend, never()).sendPacket(argThat(packet ->
+                packet instanceof ServerboundPlayerInputPacket));
+        player.setInputState(Player.InputState.CLEAR.withMovement("right"));
+        service.tick(backend);
+
+        verify(backend).sendPacket(argThat(packet ->
+                packet instanceof ServerboundPlayerInputPacket input
+                        && input.isRight() && !input.isShift()));
     }
 
     @Test
@@ -200,6 +362,26 @@ final class AutomationServiceTest {
                         && keepAlive.getPingId() == 42L),
                 eq(false));
         verify(backend).sendPacket(ServerboundClientTickEndPacket.INSTANCE);
+    }
+
+    @Test
+    void shadowClearsFrontendMovementAndSprintIntent() {
+        prepareLoadedWorld();
+        player.setInputState(Player.InputState.CLEAR
+                .withMovement("forward")
+                .withSprint(true));
+
+        assertTrue(service.shadow().join());
+        service.playerLoaded();
+        Vector3d position = player.position();
+        clearInvocations(backend);
+
+        service.tick(backend);
+
+        assertEquals(position, player.position());
+        verify(backend, never()).sendPacket(argThat(packet ->
+                packet instanceof ServerboundPlayerCommandPacket command
+                        && command.getState() == PlayerState.START_SPRINTING));
     }
 
     @Test
@@ -395,7 +577,7 @@ final class AutomationServiceTest {
     void lookPreservesTheKnownCollisionFlags() {
         player.clientStatus(true, true);
 
-        assertTrue(service.look(45.0f, -15.0f) instanceof Result.Success<?, ?>);
+        assertInstanceOf(Result.Success.class, service.look(45.0f, -15.0f));
 
         verify(backend).sendPacket(argThat(packet -> packet instanceof ServerboundMovePlayerRotPacket movement
                 && movement.isOnGround()

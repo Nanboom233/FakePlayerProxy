@@ -10,11 +10,11 @@ import lombok.Getter;
 import net.kyori.adventure.text.Component;
 
 import java.util.EnumMap;
+import java.util.EnumSet;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
-import java.util.Objects;
 import java.util.Set;
 import java.util.concurrent.CompletableFuture;
 import java.util.function.Function;
@@ -34,6 +34,8 @@ import org.geysermc.mcprotocollib.protocol.packet.ingame.serverbound.level.Serve
 import org.geysermc.mcprotocollib.protocol.packet.ingame.serverbound.level.ServerboundChunkBatchReceivedPacket;
 import org.geysermc.mcprotocollib.protocol.packet.ingame.serverbound.player.ServerboundMovePlayerPosRotPacket;
 import org.geysermc.mcprotocollib.protocol.packet.ingame.serverbound.player.ServerboundMovePlayerRotPacket;
+import org.cloudburstmc.math.vector.Vector3d;
+import org.jetbrains.annotations.NotNull;
 
 /** Mutable state for one authenticated relay connection. Access is restricted to its EventLoop. */
 public final class AutomationService {
@@ -54,6 +56,7 @@ public final class AutomationService {
     private boolean playerLoaded;
     private boolean pendingConfigurationSwitch;
     private boolean waitingConfigurationFinish;
+    private int scheduledUseCooldown;
     private List<KnownPack> offeredKnownPacks = List.of();
     private List<KnownPack> selectedKnownPacks = List.of();
     @Getter
@@ -61,15 +64,15 @@ public final class AutomationService {
     @Getter
     private boolean closed;
 
-    public AutomationService(Player owner) {
-        this.owner = Objects.requireNonNull(owner, "owner");
+    public AutomationService(@NotNull Player owner) {
+        this.owner = owner;
     }
 
-    public void setTickTask(ScheduledFuture<?> tickTask) {
+    public void setTickTask(@NotNull ScheduledFuture<?> tickTask) {
         if (this.tickTask != null) {
             throw new IllegalStateException("Automation tick is already scheduled");
         }
-        this.tickTask = Objects.requireNonNull(tickTask, "tickTask");
+        this.tickTask = tickTask;
     }
 
     public void enterGame() {
@@ -94,6 +97,8 @@ public final class AutomationService {
         pendingChatSignatures.clear();
         offeredKnownPacks = List.of();
         selectedKnownPacks = List.of();
+        scheduledActions.clear();
+        scheduledUseCooldown = 0;
         owner.resetForConfiguration();
         clientTickAccumulatorMillis = 0.0;
         inGame = false;
@@ -247,7 +252,11 @@ public final class AutomationService {
 
     public Result<Void, String> stopActions() {
         return runAction(backend -> {
+            for (ScheduledAction action : ScheduledAction.values()) {
+                inactiveScheduledAction(backend, action);
+            }
             scheduledActions.clear();
+            scheduledUseCooldown = 0;
             return owner.stopActions(backend);
         });
     }
@@ -264,50 +273,28 @@ public final class AutomationService {
         ));
     }
 
-    // The exact-shadow command does not expose this retained Automation action yet.
-    @SuppressWarnings("unused")
+    public Result<Void, String> lookAt(Vector3d target) {
+        return runAction(backend -> owner.lookAt(backend, target));
+    }
+
     public Result<Void, String> selectHotbar(int slotOneBased) {
         return runAction(backend -> owner.selectHotbar(backend, slotOneBased));
     }
 
     public Result<Void, String> move(String direction) {
-        return runAction(backend -> owner.moveInput(backend, direction));
+        return runShadowAction(backend -> owner.moveInput(backend, direction));
     }
 
-    // The exact-shadow command does not expose this retained Automation action yet.
-    @SuppressWarnings("unused")
-    public Result<Void, String> setJump(boolean enabled) {
-        return runAction(backend -> {
-            scheduledActions.remove(ScheduledAction.JUMP);
-            return owner.setJump(backend, enabled);
-        });
+    public Result<Void, String> jump(ActionMode mode, int intervalTicks) {
+        return runShadowAction(backend -> schedule(backend, ScheduledAction.JUMP, mode, intervalTicks));
     }
 
-    // The exact-shadow command does not expose this retained Automation action yet.
-    @SuppressWarnings("unused")
-    public Result<Void, String> jumpOnce() {
-        return runAction(backend -> {
-            scheduledActions.remove(ScheduledAction.JUMP);
-            return owner.pulseInput(backend, owner.inputState().withJump(true));
-        });
-    }
-
-    // The exact-shadow command does not expose this retained Automation action yet.
-    @SuppressWarnings("unused")
-    public Result<Void, String> jumpInterval(int intervalTicks) {
-        return runAction(backend -> schedule(backend, ScheduledAction.JUMP, ActionMode.INTERVAL, intervalTicks));
-    }
-
-    // The exact-shadow command does not expose this retained Automation action yet.
-    @SuppressWarnings("unused")
     public Result<Void, String> setSneak(boolean enabled) {
         return runAction(backend -> owner.setSneak(backend, enabled));
     }
 
-    // The exact-shadow command does not expose this retained Automation action yet.
-    @SuppressWarnings("unused")
     public Result<Void, String> setSprint(boolean enabled) {
-        return runAction(backend -> owner.setSprint(backend, enabled));
+        return runShadowAction(backend -> owner.setSprint(backend, enabled));
     }
 
     public Result<Void, String> attack(ActionMode mode, int intervalTicks) {
@@ -318,11 +305,30 @@ public final class AutomationService {
         return runAction(backend -> schedule(backend, ScheduledAction.USE, mode, intervalTicks));
     }
 
-    // The exact-shadow command does not expose this retained Automation action yet.
-    @SuppressWarnings("unused")
+    public boolean ownsContinuousUse() {
+        Pair<Integer, Integer> state = scheduledActions.get(ScheduledAction.USE);
+        return state != null && state.left() == -1;
+    }
+
     public Result<Void, String> dropSelectedItem(boolean stack, ActionMode mode, int intervalTicks) {
         return runAction(backend -> schedule(
                 backend, stack ? ScheduledAction.DROP_STACK : ScheduledAction.DROP, mode, intervalTicks));
+    }
+
+    public Result<Void, String> drop(boolean stack, int slot) {
+        return runAction(backend -> owner.drop(backend, stack, slot));
+    }
+
+    public Result<Void, String> dropAll(boolean stack) {
+        return runAction(backend -> {
+            for (int slot = 40; slot >= 0; slot--) {
+                Result<Void, String> result = owner.drop(backend, stack, slot);
+                if (result instanceof Result.Failure<Void, String>) {
+                    return result;
+                }
+            }
+            return new Result.Success<>(null);
+        });
     }
 
     public Result<Void, String> swapHands(ActionMode mode, int intervalTicks) {
@@ -330,7 +336,11 @@ public final class AutomationService {
     }
 
     public Result<Void, String> dismount() {
-        return runAction(backend -> owner.pulseInput(backend, owner.inputState().withShift(true)));
+        return runAction(owner::dismount);
+    }
+
+    public Result<Void, String> mount(Vector3d target, boolean coordinate) {
+        return runAction(backend -> owner.mount(backend, target, coordinate));
     }
 
     public void tick(MinecraftConnection backend) {
@@ -342,14 +352,10 @@ public final class AutomationService {
             backend.sendPacket(new ServerboundConfigurationAcknowledgedPacket(), false);
             inGame = false;
         }
-        scheduledActions.replaceAll((action, state) -> {
-            int remainingTicks = state.right() - 1;
-            if (remainingTicks <= 0) {
-                sendScheduledAction(backend, action);
-                remainingTicks = state.left();
-            }
-            return Pair.of(state.left(), remainingTicks);
-        });
+        if (inGame) {
+            owner.passiveTick();
+        }
+        EnumSet<ScheduledAction> completed = runScheduledActions(backend);
 
         if (shadow && inGame) {
             if (!playerLoaded
@@ -368,13 +374,20 @@ public final class AutomationService {
                 backend.sendPacket(ServerboundClientTickEndPacket.INSTANCE);
             }
         }
+        for (ScheduledAction action : completed) {
+            scheduledActions.remove(action);
+            inactiveScheduledAction(backend, action);
+        }
+        if (inGame) {
+            owner.releaseDelayedInput(backend);
+        }
     }
 
     private void respond(MinecraftConnection backend, Packet packet, boolean bypass) {
         if (!shadow || closed) {
             return;
         }
-        // Velocity owns the borrowed backend connection and event loop lifecycle.
+        // IDEA reports the borrowed backend EventLoop as unclosed. Velocity owns its lifecycle.
         //noinspection resource
         var eventLoop = backend.eventLoop();
         eventLoop.execute(() -> {
@@ -389,54 +402,117 @@ public final class AutomationService {
             ScheduledAction action,
             ActionMode mode,
             int intervalTicks) {
-        Objects.requireNonNull(mode, "mode");
-        if (mode == ActionMode.INTERVAL && intervalTicks < 1) {
-            return new Result.Failure<>("Interval ticks must be 1 or greater.");
+        if (scheduledActions.containsKey(action)) {
+            inactiveScheduledAction(backend, action);
         }
-        Result<Void, String> first = sendScheduledAction(backend, action);
-        if (first instanceof Result.Failure<Void, String> || mode == ActionMode.ONCE) {
-            scheduledActions.remove(action);
-            return first;
-        }
-        int period = mode == ActionMode.CONTINUOUS ? 1 : intervalTicks;
-        scheduledActions.put(action, Pair.of(period, period));
+        int period = switch (mode) {
+            case ONCE -> 0;
+            case CONTINUOUS -> -1;
+            case INTERVAL -> intervalTicks;
+        };
+        scheduledActions.put(action, Pair.of(period, period > 0 ? period : 1));
         return new Result.Success<>(null);
     }
 
-    private Result<Void, String> sendScheduledAction(
-            MinecraftConnection backend, ScheduledAction action) {
-        return switch (action) {
-            case ATTACK -> owner.attack(backend);
-            case USE -> owner.use(backend);
+    private EnumSet<ScheduledAction> runScheduledActions(MinecraftConnection backend) {
+        EnumSet<ScheduledAction> due = EnumSet.noneOf(ScheduledAction.class);
+        EnumSet<ScheduledAction> completed = EnumSet.noneOf(ScheduledAction.class);
+        scheduledActions.replaceAll((action, state) -> {
+            int remaining = state.right() - 1;
+            if (remaining <= 0) {
+                due.add(action);
+                if (state.left() == 0) {
+                    completed.add(action);
+                    return Pair.of(0, 0);
+                }
+                return Pair.of(state.left(), state.left() < 0 ? 1 : state.left());
+            }
+            inactiveScheduledAction(backend, action);
+            return Pair.of(state.left(), remaining);
+        });
+        for (ScheduledAction action : due) {
+            Pair<Integer, Integer> state = scheduledActions.get(action);
+            if (state.left() == 0 || state.left() == 1) {
+                inactiveScheduledAction(backend, action);
+            }
+        }
+
+        Boolean use = due.contains(ScheduledAction.USE) ? scheduledUse(backend) : null;
+        Boolean attack = null;
+        if (due.contains(ScheduledAction.ATTACK) && !Boolean.TRUE.equals(use)) {
+            Result<Boolean, String> result = owner.attack(
+                    backend, scheduledActions.get(ScheduledAction.ATTACK).left() == -1);
+            attack = result instanceof Result.Success<Boolean, String>(var success) && success;
+        }
+        if (Boolean.FALSE.equals(use) && Boolean.TRUE.equals(attack)) {
+            scheduledUse(backend);
+        }
+        for (ScheduledAction action : due) {
+            if (action != ScheduledAction.USE && action != ScheduledAction.ATTACK) {
+                sendScheduledAction(backend, action);
+            }
+        }
+        return completed;
+    }
+
+    private boolean scheduledUse(MinecraftConnection backend) {
+        if (scheduledUseCooldown > 0) {
+            scheduledUseCooldown--;
+            return true;
+        }
+        Result<Boolean, String> result = owner.use(backend);
+        if (result instanceof Result.Success<Boolean, String>(var success) && success) {
+            scheduledUseCooldown = 3;
+            return true;
+        }
+        return false;
+    }
+
+    private void sendScheduledAction(MinecraftConnection backend, ScheduledAction action) {
+        switch (action) {
+            case USE, ATTACK -> {
+            }
             case DROP -> owner.drop(backend, false);
             case DROP_STACK -> owner.drop(backend, true);
             case SWAP_HANDS -> owner.swapHands(backend);
-            case JUMP -> owner.pulseInput(backend, owner.inputState().withJump(true));
-        };
+            case JUMP -> owner.jump(backend);
+        }
+    }
+
+    private void inactiveScheduledAction(MinecraftConnection backend, ScheduledAction action) {
+        switch (action) {
+            case USE -> {
+                scheduledUseCooldown = 0;
+                owner.inactiveUse(backend);
+            }
+            case ATTACK -> owner.inactiveAttack(backend);
+            case JUMP -> owner.inactiveJump(backend);
+            case DROP, DROP_STACK, SWAP_HANDS -> {
+            }
+        }
     }
 
     private Result<Void, String> runAction(
             Function<MinecraftConnection, Result<Void, String>> action) {
-        // IDEA reports the borrowed EventLoop as unclosed. Velocity owns its lifecycle.
+        // IDEA reports the borrowed Velocity EventLoop as unclosed. Velocity owns its lifecycle.
         //noinspection resource
         var eventLoop = owner.eventLoop();
         if (!eventLoop.inEventLoop()) {
-            eventLoop.execute(() -> {
-                if (closed) {
-                    return;
-                }
-                MinecraftConnection backend = owner.backendConnection();
-                if (backend != null && inGame) {
-                    action.apply(backend);
-                }
-            });
-            return new Result.Success<>(null);
+            return new Result.Failure<>("fakeplayerproxy.command.automation_unavailable");
         }
         MinecraftConnection backend = owner.backendConnection();
         if (closed || !inGame || backend == null) {
-            return new Result.Failure<>("Automation is not in an active game connection.");
+            return new Result.Failure<>("fakeplayerproxy.command.automation_unavailable");
         }
         return action.apply(backend);
+    }
+
+    private Result<Void, String> runShadowAction(
+            Function<MinecraftConnection, Result<Void, String>> action) {
+        if (!shadow) {
+            return new Result.Failure<>("fakeplayerproxy.command.automation_unavailable");
+        }
+        return runAction(action);
     }
 
     public void close() {
@@ -446,6 +522,8 @@ public final class AutomationService {
         closed = true;
         shadow = false;
         scheduledActions.clear();
+        scheduledUseCooldown = 0;
+        owner.resetForClose();
         if (tickTask != null) {
             tickTask.cancel(false);
             tickTask = null;
@@ -453,12 +531,12 @@ public final class AutomationService {
     }
 
     private enum ScheduledAction {
-        ATTACK,
         USE,
+        ATTACK,
+        JUMP,
         DROP,
         DROP_STACK,
-        SWAP_HANDS,
-        JUMP
+        SWAP_HANDS
     }
 
     private record Signature(byte[] value) {
