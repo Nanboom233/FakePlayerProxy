@@ -1,0 +1,12 @@
+{"file":".trellis/spec/language/java.md","reason":"Check Java type, helper, i18n, and diagnostic rules."}
+{"file":".trellis/spec/backend/velocity-plugin.md","reason":"Check ownership, protocol, command, and focused-test contracts."}
+{"file":".trellis/spec/backend/quality-guidelines.md","reason":"Check behavior coverage without redundant implementation tests."}
+{"file":".trellis/spec/backend/error-handling.md","reason":"Check translated failures and concrete diagnostics."}
+{"file":".trellis/tasks/08-17-complete-carpet-player-command-system/research/command-inventory.md","reason":"Check the registered grammar against the Carpet source inventory."}
+{"file":".trellis/tasks/08-17-complete-carpet-player-command-system/research/coordinate-syntax.md","reason":"Check coordinate parsing against Minecraft 26.2 behavior."}
+{"file":".trellis/tasks/08-17-complete-carpet-player-command-system/research/local-action-prediction.md","reason":"Check the boolean result and Carpet scheduler contract."}
+{"file":".trellis/tasks/08-17-complete-carpet-player-command-system/research/vanilla-local-prediction-gap.md","reason":"Check all required state and packet dependencies."}
+{"file":".trellis/tasks/08-17-complete-carpet-player-command-system/research/implementation-architecture.md","reason":"Check exact ownership, inventory mapping, scheduler state, prediction boundary, and mining formula."}
+{"file": ".trellis/tasks/08-17-complete-carpet-player-command-system/research/nonshadow-movement-divergence.md", "reason": "Check the shadow-only movement and target suggestion boundary."}
+{"file": ".trellis/tasks/08-17-complete-carpet-player-command-system/research/continuous-use-and-input-travel.md", "reason": "Check active-use synchronization and environment-specific input travel."}
+{"file": ".trellis/tasks/08-17-complete-carpet-player-command-system/research/vanilla-use-release-conflict.md", "reason": "Check the Vanilla frontend release cancellation boundary."}

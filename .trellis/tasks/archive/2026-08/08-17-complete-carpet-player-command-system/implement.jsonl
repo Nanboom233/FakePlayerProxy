@@ -1,0 +1,12 @@
+{"file":".trellis/spec/language/java.md","reason":"Apply Java type, helper, i18n, and diagnostic rules."}
+{"file":".trellis/spec/backend/velocity-plugin.md","reason":"Preserve plugin ownership, protocol, command, and test contracts."}
+{"file":".trellis/tasks/08-17-complete-carpet-player-command-system/research/command-inventory.md","reason":"Use the source-verified Carpet command grammar and action semantics."}
+{"file":".trellis/tasks/08-17-complete-carpet-player-command-system/research/coordinate-syntax.md","reason":"Match Minecraft 26.2 absolute, relative, and local coordinates."}
+{"file":".trellis/tasks/08-17-complete-carpet-player-command-system/research/design-analysis.md","reason":"Use the approved ownership and minimum state design."}
+{"file":".trellis/tasks/08-17-complete-carpet-player-command-system/research/local-action-prediction.md","reason":"Apply the approved boolean local prediction contract."}
+{"file":".trellis/tasks/08-17-complete-carpet-player-command-system/research/vanilla-local-prediction-gap.md","reason":"Implement the researched Vanilla state and packet dependencies."}
+{"file":".trellis/tasks/08-16-complete-carpet-player-commands/research/carpet-player-command-feasibility.md","reason":"Use the detailed protocol feasibility evidence for every action family."}
+{"file":".trellis/tasks/08-17-complete-carpet-player-command-system/research/implementation-architecture.md","reason":"Use the resolved file ownership, inventory mapping, scheduler state, prediction boundary, and mining formula."}
+{"file": ".trellis/tasks/08-17-complete-carpet-player-command-system/research/nonshadow-movement-divergence.md", "reason": "Apply the approved shadow-only movement and target suggestion boundary."}
+{"file": ".trellis/tasks/08-17-complete-carpet-player-command-system/research/continuous-use-and-input-travel.md", "reason": "Apply authoritative active-use synchronization and environment-specific input travel."}
+{"file": ".trellis/tasks/08-17-complete-carpet-player-command-system/research/vanilla-use-release-conflict.md", "reason": "Apply the confirmed Vanilla frontend release conflict and minimum cancellation boundary."}
