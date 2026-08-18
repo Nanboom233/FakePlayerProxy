@@ -20,7 +20,8 @@
   "subtasks": [],
   "children": [
     "08-16-player-as-action-command",
-    "08-17-deprecated-support-cleanup"
+    "08-17-deprecated-support-cleanup",
+    "08-17-complete-carpet-player-command-system"
   ],
   "parent": null,
   "relatedFiles": [],

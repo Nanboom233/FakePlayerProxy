@@ -2,10 +2,9 @@
 
 ## Goal
 
-Expose the complete Carpet `/player` command surface that can be implemented by
-FakePlayerProxy, preserve Carpet action scheduling semantics where the proxy can
-observe the required client state, and explicitly define the behavior of
-server-authoritative commands that a protocol-only client cannot reproduce.
+Expose each Carpet `/player` action that FakePlayerProxy can implement through
+the Minecraft protocol. Preserve Carpet action scheduling semantics where the
+proxy can observe the required client state.
 
 The task also removes or restructures dormant prototype code and updates product
 documentation so the public command contract matches the implementation.
@@ -33,32 +32,33 @@ documentation so the public command contract matches the implementation.
 
 1. Define one authoritative, source-verified command grammar for all Carpet
    first-level actions and their parameter variants.
-2. Preserve the project's self-owned automation security boundary unless the
-   final product decision explicitly introduces a cooperating backend component.
+2. Preserve the project's self-owned automation security boundary.
 3. Match Carpet's one-action-per-type scheduler and `once`, `continuous`, and
    `interval <ticks>` modes for `use`, `jump`, `attack`, `drop`, `dropStack`,
    and `swapHands`.
-4. Match Carpet's cross-action behavior: successful use suppresses attack for
-   that tick, a successful attack can retry a failed use, and `stop` releases
-   use/dig state and clears movement, sneak, and sprint.
+4. Match Carpet's cross-action behavior. Successful use suppresses attack for
+   that tick. A successful attack can retry a failed use. `stop` releases use
+   and dig state. It also clears movement, sneak, and sprint.
 5. Implement target selection, inventory synchronization, sequence ownership,
    and cleanup state before claiming full behavior for commands that require
    them.
-6. Produce stable, translatable user-facing failures for unsupported commands,
-   missing tracked state, invalid arguments, and inactive automation sessions.
-7. Audit existing command/action code. Keep and refactor code that belongs to
-   the final command architecture; remove obsolete MVP-only branches,
+6. Produce stable, translated failures for missing tracked state, invalid
+   arguments, and inactive automation sessions.
+7. Omit server-only branches. Do not register an executor that only reports an
+   unsupported operation.
+8. Audit existing command/action code. Keep and refactor code that belongs to
+   the final command architecture. Remove obsolete MVP-only branches,
    suppressions, placeholders, and documentation claims that no longer match.
-8. Keep Carpet player actions exclusively under `/player`. Rewrite `/fpp` as
+9. Keep Carpet player actions exclusively under `/player`. Rewrite `/fpp` as
    the plugin configuration namespace. Do not retain a `/fpp player` alias.
-9. Add parser, scheduler, state, packet, cleanup, and controlled-server coverage
+10. Add parser, scheduler, state, packet, cleanup, and controlled-server coverage
    appropriate to each implemented command family.
 
 ## Acceptance Criteria
 
 - [ ] A checked-in command matrix lists every Carpet command form from the
-      pinned upstream source and maps it to proxy behavior.
-- [ ] Every accepted action routes to an observable implementation; no command
+      pinned upstream source. It maps each form to proxy behavior.
+- [ ] Every accepted action routes to an observable implementation. No command
       reports success after only sending a non-equivalent placeholder packet.
 - [ ] Action mode replacement, tick cadence, use/attack ordering, and cleanup
       match Carpet's action-pack behavior.
@@ -68,8 +68,8 @@ documentation so the public command contract matches the implementation.
       `drop`, `dropStack`, and `swapHands`.
 - [ ] Target-aware attack/use and selected-slot inventory operations are backed
       by authoritative tracked state and protocol acknowledgements.
-- [ ] Commands that cannot be equivalent in the selected architecture return an
-      explicit, documented unsupported result and are not described as parity.
+- [ ] Commands without a useful protocol implementation are absent from the
+      Brigadier tree.
 - [ ] Obsolete prototype/dead code and stale documentation are removed or
       refactored, with no unused-action suppressions left as architecture.
 - [ ] The old `/fpp` action and status branches are absent. `/fpp` exposes only
@@ -81,20 +81,20 @@ documentation so the public command contract matches the implementation.
 - Supporting Minecraft protocol versions other than the project's pinned 26.2
   target.
 - Controlling another user's authenticated automation session.
-- Copying Carpet implementation code; Carpet is behavioral reference only.
+- Copying Carpet implementation code. Carpet is behavioral reference only.
 
 ## Child Tasks
 
 | Child task | Scope | Dependency |
 | --- | --- | --- |
 | `08-16-player-as-action-command` | Add `/player as <player> <action>`, permission checks, and stable automation target lookup. | This command layer must exist before later action children expose remote actions. |
+| `08-17-complete-carpet-player-command-system` | Implement all feasible action branches and omit server-only branches. | The shared self and target command structure must remain intact. |
 
-## Open Question
+## Product Boundary
 
-- Does "complete" remain within the current protocol-only, self-owned
-  architecture, with explicit unsupported results for server-only semantics, or
-  may this task add a cooperating backend mod/plugin to reproduce arbitrary
-  `spawn` and forced `mount anything` behavior?
+- The implementation remains protocol-only.
+- `mount anything` is absent.
+- A later task will define new `spawn` semantics.
 
 ## Research
 
