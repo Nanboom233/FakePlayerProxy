@@ -307,3 +307,26 @@ Replaced ProxyResult and ProxyError with one sealed Result file, moved Permissio
 ### Status
 
 [OK] **Completed**
+
+
+## Session 10: Complete Carpet player command system
+
+**Date**: 2026-08-19
+**Task**: Complete Carpet player command system
+**Branch**: `master`
+
+### Summary
+
+Implemented the supported Carpet player action tree, shadow-only movement boundary, local interaction and movement prediction, generated runtime data, exception ownership, and Grgit-based patched Velocity build cleanup; verified 118 focused tests.
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `2061593` | (see git log) |
+| `0d91208` | (see git log) |
+| `c58debc` | (see git log) |
+
+### Status
+
+[OK] **Completed**
