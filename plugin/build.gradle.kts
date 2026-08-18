@@ -1,10 +1,14 @@
 import java.util.Properties
-import org.gradle.api.Task
-import org.gradle.api.artifacts.Configuration
-import org.gradle.api.file.ConfigurableFileTree
-import org.gradle.api.file.Directory
-import org.gradle.api.file.RegularFile
-import org.gradle.api.tasks.TaskProvider
+import org.ajoberstar.grgit.Grgit
+
+buildscript {
+    repositories {
+        mavenCentral()
+    }
+    dependencies {
+        classpath("org.ajoberstar.grgit:grgit-core:5.3.3")
+    }
+}
 
 plugins {
     java
@@ -15,27 +19,19 @@ version = rootProject.version
 
 layout.buildDirectory.set(layout.projectDirectory.dir(".gradle-build"))
 
-val mcProtocolLibVersion = "26.2-20260809.160751-16"
-val nettyVersion = "4.2.17.Final"
-val lombokVersion = "1.18.42"
-val velocityBasePropertiesFile: RegularFile = layout.projectDirectory.file("patch/velocity-base.properties")
-val velocityPatchDirectory: Directory = layout.projectDirectory.dir("patch")
-val velocityPatchFiles: ConfigurableFileTree = fileTree(velocityPatchDirectory) {
+val velocityBasePropertiesFile = layout.projectDirectory.file("patch/velocity-base.properties")
+val velocityPatchFiles = fileTree(layout.projectDirectory.dir("patch")) {
     include("0001-login-relay.patch")
     include("0002-automation-extension.patch")
 }
-val velocityPatchTests: Directory = layout.projectDirectory.dir("patch/test")
-val velocityBaseProperties: Properties = Properties().apply {
+val velocityPatchTests = layout.projectDirectory.dir("patch/test")
+val velocityCommit = requireNotNull(Properties().apply {
     velocityBasePropertiesFile.asFile.inputStream().use(::load)
-}
-val velocityCommit: String = requireNotNull(velocityBaseProperties.getProperty("commit")) {
+}.getProperty("commit")) {
     "Missing commit in ${velocityBasePropertiesFile.asFile}"
 }
-val serverDirectory: Directory = layout.projectDirectory.dir("build/server")
-val velocitySourceDirectory: Directory = serverDirectory.dir("source")
-val velocityWorkDirectory: Directory = serverDirectory.dir("work")
-val serverReleaseDirectory: Directory = serverDirectory.dir("release")
-val releasedVelocityJar: RegularFile = serverReleaseDirectory.file("velocity.jar")
+val serverReleaseDirectory = layout.projectDirectory.dir("build/server/release")
+val releasedVelocityJar = serverReleaseDirectory.file("velocity.jar")
 
 java {
     toolchain {
@@ -43,80 +39,105 @@ java {
     }
 }
 
-fun execute(directory: File, vararg command: String) {
+fun removeVelocityCheckout(work: File, failure: Throwable? = null) {
+    try {
+        if (work.exists() && System.getProperty("os.name").startsWith("Windows", ignoreCase = true)) {
+            work.walkBottomUp().forEach { it.setWritable(true) }
+        }
+        if (work.exists()) {
+            check(work.deleteRecursively()) { "Unable to delete disposable Velocity checkout: $work" }
+        }
+        check(!work.exists()) { "Disposable Velocity checkout still exists: $work" }
+    } catch (cleanupException: Throwable) {
+        if (failure == null) {
+            throw cleanupException
+        }
+        failure.addSuppressed(cleanupException)
+    }
+}
+
+fun prepareVelocityCheckout(copyTests: Boolean): File {
+    val source = layout.projectDirectory.dir("build/server/source").asFile
+    val work = layout.projectDirectory.dir("build/server/work").asFile
+    check(source.isDirectory) { "Missing fixed Velocity source checkout: $source" }
+    removeVelocityCheckout(work)
+    try {
+        work.parentFile.mkdirs()
+        Grgit.open(mapOf("dir" to source)).use { sourceRepository ->
+            check(sourceRepository.head().id == velocityCommit) {
+                "Velocity source is not pinned to $velocityCommit"
+            }
+            check(sourceRepository.status().isClean) {
+                "Velocity source checkout must remain clean"
+            }
+
+            val buildBranch = "fakeplayerproxy-build-${ProcessHandle.current().pid()}-${System.nanoTime()}"
+            sourceRepository.branch.add(mapOf(
+                "name" to buildBranch,
+                "startPoint" to velocityCommit,
+            ))
+            var repositoryFailure: Throwable? = null
+            try {
+                Grgit.clone(mapOf(
+                    "dir" to work,
+                    "uri" to source.toURI().toString(),
+                    "depth" to 1,
+                    "checkout" to false,
+                    "branches" to listOf("refs/heads/$buildBranch"),
+                )).use { repository ->
+                    repository.checkout(mapOf("branch" to velocityCommit))
+                    velocityPatchFiles.files.sortedBy { it.name }.forEach { patch ->
+                        repository.apply(mapOf("patch" to patch))
+                    }
+                }
+            } catch (exception: Throwable) {
+                repositoryFailure = exception
+                throw exception
+            } finally {
+                try {
+                    sourceRepository.branch.remove(mapOf(
+                        "names" to listOf(buildBranch),
+                        "force" to true,
+                    ))
+                } catch (cleanupException: Throwable) {
+                    if (repositoryFailure == null) {
+                        throw cleanupException
+                    }
+                    repositoryFailure.addSuppressed(cleanupException)
+                }
+            }
+        }
+        if (copyTests && velocityPatchTests.asFile.exists()) {
+            velocityPatchTests.asFile.copyRecursively(work, overwrite = true)
+        }
+        return work
+    } catch (exception: Throwable) {
+        removeVelocityCheckout(work, exception)
+        throw exception
+    }
+}
+
+fun runVelocityGradle(work: File, vararg arguments: String) {
+    val command = if (System.getProperty("os.name").startsWith("Windows", ignoreCase = true)) {
+        arrayOf("cmd", "/d", "/c", "gradlew.bat", *arguments)
+    } else {
+        arrayOf("./gradlew", *arguments)
+    }
     providers.exec {
-        workingDir(directory)
+        workingDir(work)
         commandLine(*command)
     }.result.get().assertNormalExitValue()
 }
 
-fun output(directory: File, vararg command: String): String {
-    return providers.exec {
-        workingDir(directory)
-        commandLine(*command)
-    }.standardOutput.asText.get().trim()
-}
-
-fun removeVelocityWorktree(source: File, work: File) {
-    if (work.exists() && System.getProperty("os.name").startsWith("Windows", ignoreCase = true)) {
-        work.walkBottomUp().forEach { it.setWritable(true) }
-    }
-    val registered = output(source, "git", "worktree", "list", "--porcelain")
-        .lineSequence()
-        .filter { it.startsWith("worktree ") }
-        .map { File(it.removePrefix("worktree ")).canonicalFile }
-        .any { it == work.canonicalFile }
-    if (registered) {
-        execute(source, "git", "worktree", "remove", "--force", work.absolutePath)
-    }
-    if (work.exists()) {
-        check(work.deleteRecursively()) { "Unable to delete disposable Velocity worktree: $work" }
-    }
-    check(!work.exists()) { "Disposable Velocity worktree still exists: $work" }
-    execute(source, "git", "worktree", "prune")
-}
-
-fun prepareVelocityWorktree(copyTests: Boolean): Pair<File, File> {
-    val source = velocitySourceDirectory.asFile
-    val work = velocityWorkDirectory.asFile
-    check(source.isDirectory) { "Missing fixed Velocity source checkout: $source" }
-    check(output(source, "git", "rev-parse", "HEAD") == velocityCommit) {
-        "Velocity source is not pinned to $velocityCommit"
-    }
-    check(output(source, "git", "status", "--porcelain").isEmpty()) {
-        "Velocity source checkout must remain clean"
-    }
-
-    removeVelocityWorktree(source, work)
-    work.parentFile.mkdirs()
-    execute(source, "git", "worktree", "add", "--detach", work.absolutePath, velocityCommit)
-    velocityPatchFiles.files.sortedBy { patch ->
-        patch.relativeTo(velocityPatchDirectory.asFile).invariantSeparatorsPath
-    }.forEach { patch ->
-        execute(work, "git", "apply", patch.absolutePath)
-    }
-    if (copyTests && velocityPatchTests.asFile.exists()) {
-        velocityPatchTests.asFile.copyRecursively(work, overwrite = true)
-    }
-    return source to work
-}
-
-fun runVelocityGradle(work: File, vararg arguments: String) {
-    if (System.getProperty("os.name").startsWith("Windows", ignoreCase = true)) {
-        execute(work, "cmd", "/d", "/c", "gradlew.bat", *arguments)
-    } else {
-        execute(work, "./gradlew", *arguments)
-    }
-}
-
-val assembleVelocityHost: TaskProvider<Task> = tasks.register("assembleVelocityHost") {
-    description = "Builds patched Velocity in a disposable Git worktree."
+tasks.register("assembleVelocityHost") {
+    description = "Builds patched Velocity in a disposable local checkout."
     inputs.file(velocityBasePropertiesFile)
     inputs.files(velocityPatchFiles)
     outputs.file(releasedVelocityJar)
 
     doLast {
-        val (source, work) = prepareVelocityWorktree(copyTests = false)
+        val work = prepareVelocityCheckout(copyTests = false)
+        var buildFailure: Throwable? = null
         try {
             runVelocityGradle(work, ":velocity-proxy:shadowJar")
             val velocityJars = work.resolve("proxy/build/libs")
@@ -128,13 +149,16 @@ val assembleVelocityHost: TaskProvider<Task> = tasks.register("assembleVelocityH
             }
             serverReleaseDirectory.asFile.mkdirs()
             velocityJars.single().copyTo(releasedVelocityJar.asFile, overwrite = true)
+        } catch (exception: Throwable) {
+            buildFailure = exception
+            throw exception
         } finally {
-            removeVelocityWorktree(source, work)
+            removeVelocityCheckout(work, buildFailure)
         }
     }
 }
 
-val velocityHost: Configuration = configurations.create("velocityHost") {
+val velocityHost = configurations.create("velocityHost") {
     isCanBeConsumed = false
     isCanBeResolved = false
 }
@@ -152,18 +176,10 @@ configurations.testRuntimeOnly {
 }
 
 dependencies {
-    velocityHost(files(releasedVelocityJar))
-    compileOnly("org.geysermc.mcprotocollib:protocol:$mcProtocolLibVersion") {
-        exclude(group = "io.netty")
-    }
-    compileOnly(platform("io.netty:netty-bom:$nettyVersion"))
-    compileOnly("io.netty:netty-transport")
-    compileOnly("com.google.inject:guice:7.0.0") {
-        isTransitive = false
-    }
-    compileOnly("org.slf4j:slf4j-api:2.0.16")
-    compileOnly("org.projectlombok:lombok:$lombokVersion")
-    annotationProcessor("org.projectlombok:lombok:$lombokVersion")
+    velocityHost(files(releasedVelocityJar).builtBy(tasks.named("assembleVelocityHost")))
+    compileOnly("org.jetbrains:annotations:26.0.2")
+    compileOnly("org.projectlombok:lombok:1.18.42")
+    annotationProcessor("org.projectlombok:lombok:1.18.42")
     testImplementation(platform("org.junit:junit-bom:5.11.4"))
     testImplementation("org.junit.jupiter:junit-jupiter")
     testImplementation("org.mockito:mockito-core:5.14.2")
@@ -171,20 +187,17 @@ dependencies {
 }
 
 tasks.withType<JavaCompile>().configureEach {
-    dependsOn(assembleVelocityHost)
     options.encoding = "UTF-8"
     options.release.set(21)
 }
 
 tasks.test {
     useJUnitPlatform()
-    inputs.file(releasedVelocityJar)
     systemProperty("fakeplayerproxy.velocityJar", releasedVelocityJar.asFile.absolutePath)
 }
 
 tasks.jar {
     archiveBaseName.set("fake-player-proxy")
-    archiveClassifier.set("")
 }
 
 tasks.register("patchCheck") {
@@ -195,38 +208,44 @@ tasks.register("patchCheck") {
     inputs.dir(velocityPatchTests)
 
     doLast {
-        val (source, work) = prepareVelocityWorktree(copyTests = true)
+        val work = prepareVelocityCheckout(copyTests = true)
+        var buildFailure: Throwable? = null
         try {
             runVelocityGradle(work, ":velocity-api:test", ":velocity-proxy:test")
+        } catch (exception: Throwable) {
+            buildFailure = exception
+            throw exception
         } finally {
-            removeVelocityWorktree(source, work)
+            removeVelocityCheckout(work, buildFailure)
         }
     }
 }
 
-val releaseJar: TaskProvider<Task> = tasks.register("releaseJar") {
+val pluginJarFile = tasks.jar.flatMap { it.archiveFile }
+val releasedPluginJar = pluginJarFile.map { serverReleaseDirectory.file(it.asFile.name) }
+
+tasks.register("releaseJar") {
     group = "server"
     description = "Builds patched Velocity and the FakePlayerProxy plugin."
-    dependsOn(assembleVelocityHost, tasks.jar)
-    inputs.file(tasks.jar.flatMap { it.archiveFile })
-    outputs.dir(serverReleaseDirectory)
+    dependsOn(tasks.jar)
+    inputs.file(pluginJarFile)
+    outputs.file(releasedPluginJar)
 
     doLast {
         serverReleaseDirectory.asFile.mkdirs()
-        val pluginJar = tasks.jar.get().archiveFile.get().asFile
-        pluginJar.copyTo(serverReleaseDirectory.file(pluginJar.name).asFile, overwrite = true)
+        pluginJarFile.get().asFile.copyTo(releasedPluginJar.get().asFile, overwrite = true)
     }
 }
 
 tasks.register<Exec>("runServer") {
     group = "server"
     description = "Runs the released patched Velocity server from plugin/run."
-    dependsOn(releaseJar)
+    dependsOn(tasks.named("releaseJar"))
     workingDir(layout.projectDirectory.dir("run"))
     standardInput = System.`in`
 
     doFirst {
-        val pluginJar = tasks.jar.get().archiveFile.get().asFile
+        val pluginJar = pluginJarFile.get().asFile
         val runPlugins = layout.projectDirectory.dir("run/plugins").asFile
         runPlugins.mkdirs()
         serverReleaseDirectory.file(pluginJar.name).asFile
