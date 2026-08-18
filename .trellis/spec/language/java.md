@@ -119,8 +119,8 @@ private Vector3d position;
 Validation remains explicit:
 
 ```java
-public void setPosition(Vector3d position) {
-    this.position = Objects.requireNonNull(position, "position");
+public void setPosition(@NotNull Vector3d position) {
+    this.position = position;
 }
 ```
 
@@ -204,6 +204,61 @@ a project-owned input with project-owned callers.
 
 This convention does not require dedicated tests. Compiler, framework, and code
 review feedback are sufficient unless an annotation changes runtime behavior.
+
+## Null Contracts And Guards
+
+Production Java code must not use programmer-assertion validation. This
+includes `Objects.requireNonNull`, a static `requireNonNull` import, Java
+`assert`, `Preconditions.checkNotNull`, `Preconditions.checkArgument`,
+and `Preconditions.checkState`. Test code can use these checks.
+
+`Objects.requireNonNullElse` and `Objects.requireNonNullElseGet` are allowed
+normalization operations when their fallback is guaranteed to produce a
+non-null value. Do not use them with a nullable fallback or as a disguised
+assertion.
+
+Use `@NotNull` on a project-owned declaration when all project-owned callers
+guarantee the value. The annotation states the internal contract. Do not repeat
+that contract with a runtime null check.
+
+Use an explicit `if` guard when a value crosses an external, protocol, parsed
+data, or mutable-state boundary and invalid input requires runtime handling.
+Follow the owner's existing failure contract. Return its `Result` or `Optional`
+failure, log and stop the operation, skip the invalid input, disconnect through
+the existing translated path, or throw the applicable exception. Do not
+replace a required guard with an annotation.
+
+Production code can throw exceptions. The owner must catch and handle each
+exception before it escapes into an event loop, packet handler, asynchronous
+callback, or plugin lifecycle boundary. Handling must preserve the concrete
+exception for diagnostics when the failure needs investigation.
+
+### Wrong
+
+```java
+public Service(Owner owner) {
+    this.owner = Objects.requireNonNull(owner, "owner");
+}
+```
+
+### Preferred: Internal Contract
+
+```java
+public Service(@NotNull Owner owner) {
+    this.owner = owner;
+}
+```
+
+### Preferred: Runtime Boundary
+
+```java
+if (packet.value() == null) {
+    return new Result.Failure<>("missing packet value");
+}
+```
+
+Keep the annotation-ownership rules below. Do not annotate a foreign input when
+the project cannot guarantee the foreign contract.
 
 ## Override Contract Fidelity
 

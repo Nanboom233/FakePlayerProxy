@@ -8,6 +8,7 @@
   original backend already created and paused.
 - Scope: `plugin/src/main/java/com/fakeplayerproxy/**`,
   `plugin/src/main/resources/**`, `plugin/src/test/java/com/fakeplayerproxy/**`,
+  `plugin/tools/GenResources.kt`, `plugin/tools/minecraft-data-generator-26.2.patch`,
   `mod/src/main/resources/assets/fakeplayerproxy-mod/lang/**`, and
   `docs/product/operation-guide.md`.
 - This runtime contract must not imply online auth, limbo, general gameplay
@@ -18,9 +19,9 @@
 
 - Velocity plugin main:
   `com.fakeplayerproxy.FakePlayerProxyPlugin`.
-- Commands:
-  - `/player shadow`
-  - `/player as <player> shadow`
+- Commands: the shared Carpet-compatible action grammar documented in
+  `docs/product/operation-guide.md` under both `/player <action>` and
+  `/player as <player> <action>`.
   - `/fpp op <player>`
   - `/fpp deop <player>`
 - Player command log: `<username> issued server command: /<command>`
@@ -34,11 +35,15 @@
   - Minecraft Java `26.2`
   - protocol version `776`
   - dependency `org.geysermc.mcprotocollib:protocol:26.2-20260809.160751-16`
-  - Netty runtime `4.2.17.Final`
+  - Netty runtime owned by the pinned patched Velocity host
 - Player calculation owners:
   - `world.entity.Entity.move(...)`
   - `world.entity.LivingEntity.travel(...)`
-  - `world.player.Player.tick()`
+  - `world.entity.LivingEntity.applyLivingFlags(byte)`
+  - `world.player.Player.passiveTick()`
+  - `world.player.Player.tick(MinecraftConnection, boolean)`
+- Continuous-use ownership query:
+  `automation.AutomationService.ownsContinuousUse()`.
 
 ### 3. Contracts
 
@@ -48,11 +53,19 @@
   replacement, and the FPP permission-provider wrapper.
 - `automation` owns per-player protocol, Shadow lifecycle, and action state.
 - `world`, `world/entity`, and `world/player` own world, entity, and player state.
-- Use Java 21 and pin MCProtocolLib build 16. The plugin uses patched Velocity,
-  MCProtocolLib, and Netty as `compileOnly`; patched Velocity supplies them at runtime.
-- Patched Velocity must include MCProtocolLib's complete non-Netty runtime dependency
-  closure. Velocity continues to own the Netty version. Do not move MCProtocolLib,
-  fastutil, Lombok, or Netty classes into the Plugin JAR.
+- Use Java 21 and pin MCProtocolLib build 16 in the Velocity patch. The plugin's
+  non-resolvable `velocityHost` dependency extends `compileOnly` and points to the
+  final patched Velocity JAR. Do not redeclare MCProtocolLib, Netty, Guice, or
+  SLF4J as Plugin compile dependencies.
+- The `velocityHost` file dependency is built by `assembleVelocityHost`. Gradle
+  must infer that task edge from the artifact instead of attaching the task to
+  every `JavaCompile` task.
+- Patched Velocity must include MCProtocolLib's complete runtime dependency
+  closure. Velocity owns the Netty version. Do not move MCProtocolLib, fastutil,
+  Lombok, or Netty classes into the Plugin JAR.
+- `assembleVelocityHost` owns only the released `velocity.jar`. `releaseJar`
+  owns only the copied Plugin JAR; it must not claim their shared release
+  directory as one task output.
 - When Plugin source uses Lombok, declare the same Lombok version as `compileOnly`
   and `annotationProcessor`; Lombok remains compile-time-only and must not be packaged.
 - Fixed Player calculation loads only the committed
@@ -74,7 +87,9 @@
   connection secrets.
 - `/player shadow` uses its exact command source. `/player as <player> shadow`
   resolves an active automation player by case-insensitive authenticated name.
-  Both paths attach the same complete Brigadier action node.
+  Ordinary actions attach to both paths. `jump`, `move`, `sprint`, `unsprint`,
+  and `kill` attach only below the protected target path and require that target
+  to be Shadow.
 - `/player` and `/fpp` have no root requirement and remain local to the proxy.
   Their root literals do not need an executor to prevent forwarding. The patched
   player command handler consumes a registered and usable Velocity root.
@@ -83,6 +98,7 @@
   requirements.
 - `AutomationManager` target lookup and suggestions scan its exact-player map,
   exclude inactive entries, and never use Velocity's public player registry.
+  Target suggestions include only current Shadow players.
 - `ops.json` is an array of `{ "uuid": <uuid>, "name": <name> }` entries.
   UUID controls authorization; name is metadata used for display and offline
   revocation. Missing configuration loads an empty set and malformed content
@@ -113,13 +129,51 @@
 - An accepted Mod connection registers from native `PostLoginEvent` using an
   `EventTask`. Vanilla raw tunnel and ordinary logins have no backend at that point
   and do not create a service.
-- `/player shadow` uses the exact command-source `Player`, clears input, sends Stop
-  Sprinting, then closes the frontend. `DisconnectEvent.cancel()` retains the
+- `/player shadow` uses the exact command-source `Player`. Before frontend close,
+  it clears local input and actual sprint state, sends clear input and Stop
+  Sprinting, and closes a current menu. `DisconnectEvent.cancel()` retains the
   original backend only when that exact service is shadowing.
 - `attack`, `use`, `drop`, `dropStack`, and `swapHands` support default/`once`,
   `continuous`, and `interval <ticks>` modes through the automation action scheduler.
 - Scheduled actions run on the connection's 20 TPS EventLoop tick. Manual `stop`,
   `kill`, service replacement, and shutdown cancel scheduled actions.
+- Every in-game service tick calls `Player.passiveTick()` before scheduled
+  actions. This advances entity interpolation and cooldowns for shadow and
+  non-shadow connections. Only shadow runs local player movement and sends
+  movement or Client Tick End packets.
+- A forwarded `ServerboundSetCarriedItemPacket` updates the same selected-slot
+  field that local inventory prediction reads. An actual main-hand slot change
+  clears local main-hand use so later backend metadata can establish the current
+  use state.
+- Once and interval entity attacks send one attack packet and one main-hand
+  swing. Continuous attack sends once for a newly acquired entity ID. It does
+  not repeat for that ID. A miss, block hit, target change, inactive cleanup, or
+  stop clears or replaces the retained ID as applicable.
+- A modeled positive-duration use stores its active hand. Living Entity flags
+  from backend metadata confirm or clear that state and select the active hand.
+  Later continuous-use ticks return success without another use packet while
+  the backend reports active use. Inactive use sends Release Use Item once and
+  clears the active hand.
+- An attached Vanilla frontend starts local use from the same backend Living
+  Entity flags. If its physical use key is up, it sends
+  `ServerboundPlayerActionPacket(RELEASE_USE_ITEM)` on the next keybind tick.
+  The synchronous serverbound listener cancels only that action while the
+  existing `USE` schedule is continuous. It preserves all other player actions
+  and every release outside continuous ownership. Do not cancel or rewrite the
+  clientbound metadata.
+- Shadow movement cancels opposite direction flags, normalizes diagonal input,
+  applies sneak scaling, and rotates input by yaw. `LivingEntity.travel(...)`
+  applies that input inside the active air, water, or lava branch with its own
+  acceleration and damping. Ground jump uses `JUMP_STRENGTH`, Jump Boost, and
+  the sprint jump impulse. Fluid jump and water descent modify fluid movement.
+- Sprint input is intent. A shadow movement tick starts actual sprint only for
+  forward input, valid food or flight state, and no horizontal collision. Start
+  and Stop Sprinting packets are sent only when actual sprint changes.
+- Dismount sends shift input and sets a two-tick release counter. The first
+  service tick keeps shift pressed. The second sends the then-current input
+  state. Passenger packets remain authoritative.
+- `AutomationManager.kill(Player)` requires the exact target service to be in
+  shadow state before map removal or connection close.
 - Decode every Level Chunk section into a temporary array and install the Chunk only
   after the complete payload succeeds. An unknown or incomplete Chunk is not inserted
   as loaded air. Collision and fluid queries return no result for that Chunk, and
@@ -158,16 +212,17 @@
 - Entity removal detaches both sides of every vehicle/passenger relation and removes
   the Entity from that Player's `World`. The Plugin does not retain a removed marker,
   placeholder Entity, pending relation, or unrelated entity-ground state.
-- `attack` is implemented as a main-hand swing only. Target-aware entity attack
-  and block breaking require world/entity tracking and must remain documented as
-  deferred.
-- `use` is implemented as main-hand item use only. Block use, entity
-  interaction, offhand fallback, and exact Carpet cooldown behavior require
-  target/inventory tracking and must remain documented as deferred.
-- `drop`, `dropStack`, and `swapHands` send vanilla selected-slot packets but do
-  not verify inventory state yet.
-- `dismount` is a shift-input pulse. Vehicle-state-aware behavior remains
-  deferred.
+- `PlayerCommand` builds each action node once. It attaches ordinary nodes to
+  the self and protected target parents, then attaches the five Shadow-only
+  nodes only to the target parent with contextual requirements. Ordinary
+  actions submit to the selected player's owner EventLoop; `shadow` retains its
+  asynchronous disconnect lifecycle.
+- `PlayerInventory` owns slots `0..40`, menu-zero projection, cursor, selected
+  slot, state ID, open menu, component patches, and local inventory prediction.
+- `World` owns shared block/entity raycast and mount selection. `Player` owns
+  interaction attributes, cooldowns, use state, mining state, and packet output.
+- `AutomationService` owns only Carpet schedule state and use-before-attack
+  ordering. `spawn` and `mount anything` are not registered.
 
 ## Runtime Package Ownership
 
@@ -223,9 +278,25 @@ service, or tick task for this package split.
 | `/player` source has no exact service | `fakeplayerproxy.command.automation_unavailable` |
 | `/player as` target is inactive or absent | `fakeplayerproxy.command.target_unavailable` |
 | Non-shadow action has no exact service | `automation_registration_missing` |
-| `/player hotbar 10` | `player_invalid_hotbar` |
-| `/player attack interval 0` | `player_invalid_interval` |
-| `/player drop all` | `DEFERRED` command response |
+| `/player hotbar 10` | Rejected by Brigadier bounds |
+| `/player attack interval 0` | Rejected by Brigadier bounds |
+| Forwarded carried-item slot changes | Update local selected slot; clear main-hand use only on an actual slot edge |
+| A non-shadow service tick runs | Advance passive world state before actions; do not send local movement |
+| Continuous attack keeps the same entity target | Return success without another attack packet |
+| Continuous attack acquires a new entity target | Send one attack packet and one main-hand swing |
+| Backend Living Entity flags report active use | Update the existing active hand from the authoritative metadata |
+| Backend Living Entity flags clear active use | Clear the existing active hand so a later continuous tick can start again |
+| Continuous use has an active use hand | Return success without another use packet |
+| Attached frontend releases use during scheduled continuous use | Cancel only that frontend `RELEASE_USE_ITEM` packet |
+| Frontend releases use outside scheduled continuous use | Forward the packet unchanged |
+| Dismount reaches its first service tick | Keep shift pressed and decrement the release counter |
+| Dismount reaches its second service tick | Send the current stored input state |
+| Sprint intent has no effective forward movement | Keep actual sprint false or send one Stop edge |
+| `jump`, `move`, `sprint`, or `unsprint` targets a non-Shadow player | Reject through the existing automation-unavailable result |
+| `/player kill` target is not shadow | `fakeplayerproxy.command.kill_requires_shadow`; keep map and connections |
+| `/player as <player>` requests suggestions | Suggest only active Shadow players |
+| Shadow input runs in water | Use the water acceleration and damping branch; apply fluid jump or descent there |
+| `/player drop all` | Visit command slots `40..0` with menu-zero throw clicks |
 | Original backend becomes inactive | remove the exact map entry and cancel its tick |
 | `minecraft-data/minecraft-data.bin` is missing or structurally unreadable | Fail resource loading before Player calculation |
 | Level Chunk section decoding fails or leaves trailing section bytes | Do not install or replace that Chunk |
@@ -238,22 +309,53 @@ service, or tick task for this package split.
 - Good: two accepted Mod players can run actions concurrently. Each action uses
   only the exact command-source `Player` registration and scheduled actions.
 - Good: after play state, run `/player attack interval 20`; one main-hand
-  swing is sent immediately, then future swings repeat every 20 Minecraft ticks
+  swing is sent after 20 action ticks, then future swings repeat every 20 Minecraft ticks
   until `/player stop`, `/player kill`, or proxy shutdown.
+- Good: a moving entity updates before a non-shadow one-shot attack raycast. The
+  proxy sends the entity ID selected from its current interpolated bounds.
+- Good: continuous food use sends one start request. Backend Living Entity flags
+  keep or clear the active hand. A real client slot change clears stale main-hand
+  use without adding another use-state model.
+- Good: an attached frontend receives the active-use flag and keeps its Vanilla
+  animation and movement prediction. Its automatic release cannot cancel the
+  continuous action.
+- Good: shadow forward movement starts sprint once. Clearing forward movement
+  sends one stop and does not repeat it on later ticks.
+- Good: the same Shadow input accelerates through the selected air, water, or
+  lava travel branch. Water movement keeps its fluid damping.
+- Base: dismount keeps shift across the first service tick and restores the
+  current input on the second tick.
 - Base: `/fpp op <player>` records an online authenticated player's UUID and
   makes the protected branches and their suggestions available without reconnecting.
 - Base: run `/player drop`; the selected item drop packet is sent once.
 - Base: a dead Shadow continues required protocol ticks but does not calculate
   movement or auto-respawn.
+- Base: `/player as` suggests only current Shadow players. Shadow-only action
+  nodes are absent from the self path and unavailable for a non-Shadow target.
 - Bad: run against a non-`26.2` upstream server. The runtime may disconnect during
   login or packet handling because packet IDs and shapes are version-specific.
 - Bad: treat an absent Chunk as air or add editable metadata/hash checks that have
   no runtime purpose.
-- Bad: run `/player drop all`; the command returns deferred because full
-  inventory traversal and destructive slot drops require an inventory tracker
-  and product-level confirmation flow.
+- Bad: treat `/player drop all` as a selected-slot packet. It must visit command
+  slots `40..0` with the tracked menu-zero projection.
 - Bad: update only the permission function and expect the client to discover a
   protected Brigadier child that was absent from its previously received tree.
+- Bad: advance entity interpolation only during shadow. Non-shadow action
+  raycasts then use stale entity bounds.
+- Bad: send shift press and restore in the same call or on the first service
+  tick. The backend can observe only the restored input.
+- Bad: remove a non-shadow service during `/player kill`.
+- Bad: keep local continuous-use state after backend flags or a selected-slot
+  edge reports that use has stopped.
+- Bad: remove or clear active-use flags from the clientbound entity metadata to
+  prevent frontend release. This hides authoritative state and breaks client
+  animation and movement prediction.
+- Bad: cancel every frontend release based only on `activeUseHand`. That field
+  does not prove that the continuous scheduler owns the action.
+- Bad: add land movement speed before selecting the air, water, or lava travel
+  branch.
+- Bad: expose Shadow-only action nodes on the self path or suggest non-Shadow
+  targets under `/player as`.
 
 ### 6. Tests Required
 
@@ -276,7 +378,9 @@ service, or tick task for this package split.
   - an authorized target can use the shared `shadow` node;
   - unauthorized sources cannot enter `as`;
   - inactive targets report unavailable;
-  - target suggestions read the live active-name snapshot.
+  - target suggestions read the live active Shadow-name snapshot;
+  - the self path omits Shadow-only actions and target requirements reject a
+    non-Shadow player.
 - FPP command:
   - the bare root returns handled without exposing a configuration branch;
   - authorized `op` and `deop` persist and apply immediately;
@@ -297,6 +401,22 @@ service, or tick task for this package split.
   - simple Carpet packet actions use that Player's existing backend;
   - interval actions repeat until `stopActions`;
   - scheduled actions are canceled by manual stop/kill/shutdown.
+- Manual action repairs:
+  - `PlayerTest` covers current entity attack, continuous target retention,
+    backend-confirmed held use, carried-slot recovery, air and water movement,
+    fluid jump, sprint edges, and delayed dismount release;
+  - `AutomationServiceTest` asserts passive state advances before actions,
+    movement actions reject non-Shadow targets, and shadow entry clears frontend
+    intent;
+  - `AutomationManagerTest` asserts non-shadow kill preserves the exact entry
+    and shadow kill removes and closes it;
+  - `DecoderTest` and `WorldTest` cover the generated Living Entity flag metadata
+    ID and its runtime dispatch;
+  - `AutomationServiceTest` covers continuous-use ownership across replacement,
+    stop, configuration reset, and close;
+  - review checks the short plugin cancellation guard directly instead of
+    adding a plugin test class or duplicating generic packet-event tests;
+  - do not add a test class for these cases.
 - Boundary:
   - the service stores one final Plugin `Player` owner and no connection field;
   - no command resolves a Player by UUID during normal routing;
@@ -360,19 +480,59 @@ player.refreshCommands();
 The refresh rebuilds from the retained backend graph and reuses Velocity's normal
 injector. Do not manually add protected literals or bypass `.requires(...)`.
 
-#### Wrong: Non-Executable Local Root
+#### Wrong: Shadow-Only Self Node
 
 ```java
-var root = literalArgumentBuilder("player");
+root.then(jump);
 ```
 
-Velocity treats a bare invocation as unknown and can forward it to the backend.
+This advertises a locally simulated action to a real client that remains the
+movement authority.
 
-#### Correct: Locally Handled Root
+#### Correct: Contextual Shadow Target Node
 
 ```java
-var root = literalArgumentBuilder("player").executes(context -> 1);
+target.then(jump.requiresWithContext((context, reader) -> isShadowTarget(context)));
 ```
+
+The patched command handler consumes a registered usable bare root without a
+root executor.
+
+#### Wrong: Land Acceleration Before Travel
+
+```java
+addVelocity(landInput.mul(effectiveMovementSpeed()));
+travel(world, flying);
+```
+
+#### Correct: Input Inside The Selected Environment
+
+```java
+travel(world, flying, input, sprinting, jumping, descending);
+```
+
+The air, water, and lava branches apply their own acceleration and damping.
+
+#### Wrong: Hide Backend Active Use
+
+```java
+event.setPacket(withUsingItemFlagCleared(event.getPacket()));
+```
+
+This makes the frontend disagree with the backend about animation and movement
+prediction.
+
+#### Correct: Cancel The Conflicting Frontend Release
+
+```java
+if (packet.getAction() == PlayerAction.RELEASE_USE_ITEM
+        && service.ownsContinuousUse()) {
+    event.cancel();
+}
+```
+
+Keep the backend metadata visible. The continuous scheduler, not the active
+hand field, owns this cancellation boundary.
 
 #### Wrong: Runtime Metadata Layer
 
@@ -391,6 +551,28 @@ private static final String RESOURCE = "/minecraft-data/minecraft-data.bin";
 
 Load and structurally decode the one committed binary. Package the generator notice
 as `minecraft-data/minecraft-data-generator-LICENSE`.
+
+#### Wrong: Shadow-Only Passive State
+
+```java
+if (shadow && inGame) {
+  owner.passiveTick();
+  runScheduledActions(backend);
+}
+```
+
+This leaves non-shadow entity interpolation stale before action raycasts.
+
+#### Correct: Passive State Before Actions
+
+```java
+if (inGame) {
+  owner.passiveTick();
+}
+runScheduledActions(backend);
+```
+
+Local player movement remains in the later shadow-only branch.
 
 ## Scenario: Velocity Server Hello, Transfer Fallback, And Direct Relay
 
@@ -526,9 +708,12 @@ as `minecraft-data/minecraft-data-generator-LICENSE`.
   nested Velocity build occur in a disposable build checkout separate from
   `plugin/build/server/source/`.
 - `releaseJar` must be repeatable on Windows: clear read-only attributes inside
-  the disposable Git checkout, require its complete deletion, then recreate it
-  as a worktree from the fixed source checkout. Never clean or modify the reference
-  checkout.
+  the disposable checkout and require its complete deletion. Grgit validates the
+  pinned clean source, creates a unique temporary ref at that commit, makes a
+  depth-one local clone, detaches the clone at the pinned commit, applies the
+  ordered patches, and removes the temporary ref in `finally`. Never modify the
+  reference working tree. Preserve a build failure when cleanup also fails by
+  attaching the cleanup failure as suppressed.
 - `runServer` uses `plugin/run/` as its working directory and deploys the current
   plugin jar to `plugin/run/plugins/` before launch.
 - Reuse Velocity's existing translatable `ConnectionMessages` components for
@@ -612,7 +797,9 @@ as `minecraft-data/minecraft-data-generator-LICENSE`.
 | Raw bootstrap receives Login Start | Send a `LOGIN` handshake and unchanged Login Start fields, then remove codecs and forward bytes |
 | Raw bootstrap fails before handoff | Send a stable Login disconnect and close both legs; log a diagnostic failure with its complete `Throwable` |
 | Either raw leg closes or a raw write fails after handoff | Close both channels without injecting a Minecraft packet |
-| Re-running `releaseJar` with a previous disposable checkout present | Remove the complete generated worktree, then recreate, apply, and build from the Velocity patch set |
+| Re-running `releaseJar` with a previous disposable checkout present | Remove the complete generated checkout, create a shallow local Grgit clone at the pinned commit, apply the ordered patch set, and remove its unique temporary source ref |
+| Plugin compilation needs a patched Velocity or bundled runtime API | Build `velocity.jar` through the `velocityHost` artifact provenance, then compile against that single host |
+| A release task declares the complete shared release directory | Reject the output model; each producer declares only its own JAR |
 | PostLogin has the original relay backend | Register the exact Player service on its EventLoop |
 | `/player shadow` has an active backend and false shadow state | Set shadow state, disconnect frontend, and keep the backend connection |
 | `/player shadow` has no active backend or shadow state is already true | Return false and keep the current connection state |
@@ -638,6 +825,8 @@ as `minecraft-data/minecraft-data-generator-LICENSE`.
   the relay, and one future barrier joins the two configuration prerequisites.
 - Good: one numbered patch keeps the base relay change, and a later numbered
   patch adds an independent production change.
+- Good: one patched `velocityHost` artifact supplies Velocity and its bundled
+  runtime APIs to Plugin compilation without duplicate module versions.
 - Good: an accepted Mod player runs `/player shadow`, the frontend connection
   closes, and the same backend connection continues through keepalive packets.
 - Good: the player uses a fresh login after the shadow backend closes. The new
@@ -658,6 +847,8 @@ as `minecraft-data/minecraft-data-generator-LICENSE`.
 - Bad: shadow creates another backend connection, copies `K`, swaps the play
   handler, or adds ownership and transfer state.
 - Bad: a Velocity patch file adds a file under an upstream test source directory.
+- Bad: the Plugin build separately pins a Netty or MCProtocolLib compile version
+  already owned by the patched host, or two tasks claim the same release output.
 - Bad: the code has local comments, but a reader cannot follow the full relay from
   the target Hello to target configuration.
 
@@ -698,6 +889,8 @@ as `minecraft-data/minecraft-data-generator-LICENSE`.
   decode Select Known Packs, round-trip a non-air Chunk Section, and execute the
   Lombok call used by MCProtocolLib. A class-presence or source-text assertion is
   not sufficient for this runtime gate.
+- A focused Gradle graph check must show `assembleVelocityHost` before
+  `compileJava`, `test`, `releaseJar`, and `runServer` through the host artifact.
 - Live-test the Vanilla Transfer/raw fallback, accepted Mod online-backend
   connection and single proof message, declined Mod fallback, Escape behavior,
   and the Mod connection to an unpatched server.
@@ -722,6 +915,19 @@ from patch contents.
 
 The task creates a separate build checkout.
 It applies the Velocity patch set and leaves the reference checkout unchanged.
+
+#### Wrong: Duplicate Host Dependencies
+
+```kotlin
+compileOnly("org.geysermc.mcprotocollib:protocol:<version>")
+compileOnly(platform("io.netty:netty-bom:<version>"))
+```
+
+#### Correct: Host Artifact Provenance
+
+```kotlin
+velocityHost(files(releasedVelocityJar).builtBy(assembleVelocityHost))
+```
 
 #### Wrong: Broad Patch
 
