@@ -743,6 +743,7 @@ public final class World {
     }
 
     public void select(PlayerSpawnInfo spawnInfo) {
+        //noinspection ConstantConditions
         if (spawnInfo == null || spawnInfo.getWorldName() == null) {
             return;
         }
