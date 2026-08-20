@@ -330,3 +330,27 @@ Implemented the supported Carpet player action tree, shadow-only movement bounda
 ### Status
 
 [OK] **Completed**
+
+
+## Session 11: Complete auto reconnect
+
+**Date**: 2026-08-20
+**Task**: Complete auto reconnect
+**Branch**: `master`
+
+### Summary
+
+Implemented auto reconnect, updated Velocity patches and documentation, added Java 25 upgrade planning task, recorded temporary process safety, and archived the auto reconnect task. Focused tests and patch checks passed. Live reconnect acceptance remains for manual testing.
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `3be5b3c` | (see git log) |
+| `9d434db` | (see git log) |
+| `281352a` | (see git log) |
+| `10c1fb1` | (see git log) |
+
+### Status
+
+[OK] **Completed**
