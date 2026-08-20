@@ -4,6 +4,7 @@ import static org.mockito.ArgumentMatchers.argThat;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.inOrder;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
@@ -19,7 +20,9 @@ import com.velocitypowered.proxy.protocol.netty.MinecraftDecoder;
 import com.velocitypowered.proxy.protocol.netty.MinecraftVarintFrameDecoder;
 import com.velocitypowered.proxy.protocol.packet.ResourcePackRequestPacket;
 import com.velocitypowered.proxy.protocol.packet.ResourcePackResponsePacket;
+import com.velocitypowered.proxy.protocol.packet.PluginMessagePacket;
 import com.velocitypowered.proxy.protocol.packet.config.FinishedUpdatePacket;
+import com.velocitypowered.proxy.util.VelocityChannelRegistrar;
 import io.netty.channel.Channel;
 import io.netty.channel.ChannelPipeline;
 import java.util.UUID;
@@ -82,6 +85,23 @@ final class HeadlessConfigSessionHandlerTest {
     verify(backend).setActiveSessionHandler(
         org.mockito.ArgumentMatchers.eq(StateRegistry.PLAY),
         any(TransitionSessionHandler.class));
+  }
+
+  @Test
+  void forwardsAnUnregisteredPluginMessageWithoutCopyingItsContent() {
+    MinecraftConnection frontend = mock(MinecraftConnection.class);
+    VelocityChannelRegistrar channels = mock(VelocityChannelRegistrar.class);
+    PluginMessagePacket packet = mock(PluginMessagePacket.class);
+    when(player.getConnection()).thenReturn(frontend);
+    when(server.getChannelRegistrar()).thenReturn(channels);
+    when(packet.getChannel()).thenReturn("example:unregistered");
+    when(channels.getFromId("example:unregistered")).thenReturn(null);
+    when(packet.retain()).thenReturn(packet);
+
+    handler.handle(packet);
+
+    verify(frontend).write(packet);
+    verify(packet, never()).content();
   }
 
   private static ResourcePackRequestPacket pack(String hash, boolean required) {

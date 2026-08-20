@@ -2,23 +2,7 @@ diff --git a/proxy/src/main/java/com/velocitypowered/proxy/connection/backend/Lo
 index 14884af4670fe30b00ee580ea3d65fc7f6056068..d2c8bfc12b5f3c031a8f1f2f19020f8eef0d60b5 100644
 --- a/proxy/src/main/java/com/velocitypowered/proxy/connection/backend/LoginSessionHandler.java
 +++ b/proxy/src/main/java/com/velocitypowered/proxy/connection/backend/LoginSessionHandler.java
-@@ -1,219 +1,608 @@
- /*
-  * Copyright (C) 2018-2023 Velocity Contributors
-  *
-  * This program is free software: you can redistribute it and/or modify
-  * it under the terms of the GNU General Public License as published by
-  * the Free Software Foundation, either version 3 of the License, or
-  * (at your option) any later version.
-  *
-  * This program is distributed in the hope that it will be useful,
-  * but WITHOUT ANY WARRANTY; without even the implied warranty of
-  * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-  * GNU General Public License for more details.
-  *
-  * You should have received a copy of the GNU General Public License
-  * along with this program.  If not, see <https://www.gnu.org/licenses/>.
-  */
+@@ -17,11 +17,14 @@
  
  package com.velocitypowered.proxy.connection.backend;
  
@@ -33,8 +17,7 @@ index 14884af4670fe30b00ee580ea3d65fc7f6056068..d2c8bfc12b5f3c031a8f1f2f19020f8e
  import com.velocitypowered.proxy.VelocityServer;
  import com.velocitypowered.proxy.config.PlayerInfoForwarding;
  import com.velocitypowered.proxy.config.VelocityConfiguration;
- import com.velocitypowered.proxy.connection.MinecraftConnection;
- import com.velocitypowered.proxy.connection.MinecraftSessionHandler;
+@@ -30,22 +33,33 @@ import com.velocitypowered.proxy.connection.MinecraftSessionHandler;
  import com.velocitypowered.proxy.connection.PlayerDataForwarding;
  import com.velocitypowered.proxy.connection.client.ClientPlaySessionHandler;
  import com.velocitypowered.proxy.connection.client.ConnectedPlayer;
@@ -68,8 +51,7 @@ index 14884af4670fe30b00ee580ea3d65fc7f6056068..d2c8bfc12b5f3c031a8f1f2f19020f8e
  import java.util.concurrent.CompletableFuture;
  import net.kyori.adventure.key.Key;
  import net.kyori.adventure.text.Component;
- import org.apache.logging.log4j.LogManager;
- import org.apache.logging.log4j.Logger;
+@@ -54,6 +68,22 @@ import org.apache.logging.log4j.Logger;
  
  /**
   * Handles a player trying to log into the proxy.
@@ -92,12 +74,7 @@ index 14884af4670fe30b00ee580ea3d65fc7f6056068..d2c8bfc12b5f3c031a8f1f2f19020f8e
   */
  public class LoginSessionHandler implements MinecraftSessionHandler {
  
-   private static final Logger logger = LogManager.getLogger(LoginSessionHandler.class);
- 
-   private static final Component MODERN_IP_FORWARDING_FAILURE =
-       Component.translatable("velocity.error.modern-forwarding-failed");
- 
-   private final VelocityServer server;
+@@ -66,6 +96,10 @@ public class LoginSessionHandler implements MinecraftSessionHandler {
    private final VelocityServerConnection serverConn;
    private final CompletableFuture<Impl> resultFuture;
    private boolean informationForwarded;
@@ -108,10 +85,7 @@ index 14884af4670fe30b00ee580ea3d65fc7f6056068..d2c8bfc12b5f3c031a8f1f2f19020f8e
  
    LoginSessionHandler(VelocityServer server, VelocityServerConnection serverConn,
        CompletableFuture<Impl> resultFuture) {
-     this.server = server;
-     this.serverConn = serverConn;
-     this.resultFuture = resultFuture;
-   }
+@@ -76,6 +110,35 @@ public class LoginSessionHandler implements MinecraftSessionHandler {
  
    @Override
    public boolean handle(EncryptionRequestPacket packet) {
@@ -147,54 +121,7 @@ index 14884af4670fe30b00ee580ea3d65fc7f6056068..d2c8bfc12b5f3c031a8f1f2f19020f8e
      throw new IllegalStateException("Backend server is online-mode!");
    }
  
-   @Override
-   public boolean handle(LoginPluginMessagePacket packet) {
-     MinecraftConnection mc = serverConn.ensureConnected();
-     VelocityConfiguration configuration = server.getConfiguration();
-     if (configuration.getPlayerInfoForwardingMode() == PlayerInfoForwarding.MODERN
-         && packet.getChannel().equals(PlayerDataForwarding.CHANNEL)) {
- 
-       int requestedForwardingVersion = PlayerDataForwarding.MODERN_DEFAULT;
-       // Check version
-       if (packet.content().readableBytes() == 1) {
-         requestedForwardingVersion = packet.content().readByte();
-       }
-       ConnectedPlayer player = serverConn.getPlayer();
-       ByteBuf forwardingData = PlayerDataForwarding.createForwardingData(
-           configuration.getForwardingSecret(),
-           serverConn.getPlayerRemoteAddressAsString(),
-           player.getProtocolVersion(),
-           player.getGameProfile(),
-           player.getIdentifiedKey(),
-           requestedForwardingVersion);
- 
-       LoginPluginResponsePacket response = new LoginPluginResponsePacket(
-               packet.getId(), true, forwardingData);
-       mc.write(response);
-       informationForwarded = true;
-     } else {
-       // Don't understand, fire event if we have subscribers
-       if (!this.server.getEventManager().hasSubscribers(ServerLoginPluginMessageEvent.class)) {
-         mc.write(new LoginPluginResponsePacket(packet.getId(), false, Unpooled.EMPTY_BUFFER));
-         return true;
-       }
- 
-       final byte[] contents = ByteBufUtil.getBytes(packet.content());
-       final MinecraftChannelIdentifier identifier = MinecraftChannelIdentifier
-           .from(packet.getChannel());
-       this.server.getEventManager().fire(new ServerLoginPluginMessageEvent(serverConn, identifier,
-               contents, packet.getId()))
-           .thenAcceptAsync(event -> {
-             if (event.getResult().isAllowed()) {
-               mc.write(new LoginPluginResponsePacket(packet.getId(), true, Unpooled
-                   .wrappedBuffer(event.getResult().getResponse())));
-             } else {
-               mc.write(new LoginPluginResponsePacket(packet.getId(), false, Unpooled.EMPTY_BUFFER));
-             }
-           }, mc.eventLoop());
-     }
-     return true;
-   }
+@@ -130,6 +193,8 @@ public class LoginSessionHandler implements MinecraftSessionHandler {
  
    @Override
    public boolean handle(DisconnectPacket packet) {
@@ -203,14 +130,7 @@ index 14884af4670fe30b00ee580ea3d65fc7f6056068..d2c8bfc12b5f3c031a8f1f2f19020f8e
      resultFuture.complete(ConnectionRequestResults.forDisconnect(packet, serverConn.getServer()));
      serverConn.disconnect();
      return true;
-   }
- 
-   @Override
-   public boolean handle(SetCompressionPacket packet) {
-     serverConn.ensureConnected().setCompressionThreshold(packet.getThreshold());
-     return true;
-   }
- 
+@@ -144,11 +209,101 @@ public class LoginSessionHandler implements MinecraftSessionHandler {
    @Override
    public boolean handle(ServerLoginSuccessPacket packet) {
      if (server.getConfiguration().getPlayerInfoForwardingMode() == PlayerInfoForwarding.MODERN && !informationForwarded) {
@@ -312,46 +232,7 @@ index 14884af4670fe30b00ee580ea3d65fc7f6056068..d2c8bfc12b5f3c031a8f1f2f19020f8e
      // The player has been logged on to the backend server, but we're not done yet. There could be
      // other problems that could arise before we get a JoinGame packet from the server.
  
-     // Move into the PLAY phase.
-     MinecraftConnection smc = serverConn.ensureConnected();
-     if (smc.getProtocolVersion().lessThan(ProtocolVersion.MINECRAFT_1_20_2)) {
-       smc.setActiveSessionHandler(StateRegistry.PLAY, new TransitionSessionHandler(server, serverConn, resultFuture));
-     } else {
-       smc.write(new LoginAcknowledgedPacket());
-       smc.setActiveSessionHandler(StateRegistry.CONFIG, new ConfigSessionHandler(server, serverConn, resultFuture));
-       ConnectedPlayer player = serverConn.getPlayer();
-       if (player.getClientSettingsPacket() != null) {
-         smc.write(player.getClientSettingsPacket());
-       }
-       if (player.getConnection().getActiveSessionHandler() instanceof ClientPlaySessionHandler clientPlaySessionHandler) {
-         smc.setAutoReading(false);
-         clientPlaySessionHandler.doSwitch().thenRunAsync(() -> smc.setAutoReading(true), smc.eventLoop());
-       } else {
-         // Initial login - the player is already in configuration state.
-         server.getEventManager().fireAndForget(new PlayerEnteredConfigurationEvent(player, serverConn));
-       }
-     }
- 
-     return true;
-   }
- 
-   @Override
-   public boolean handle(ClientboundStoreCookiePacket packet) {
-     throw new IllegalStateException("Can only store cookie in CONFIGURATION or PLAY protocol");
-   }
- 
-   @Override
-   public boolean handle(ClientboundCookieRequestPacket packet) {
-     server.getEventManager().fire(new CookieRequestEvent(serverConn.getPlayer(), packet.getKey()))
-         .thenAcceptAsync(event -> {
-           if (event.getResult().isAllowed()) {
-             final Key resultedKey = event.getResult().getKey() == null
-                 ? event.getOriginalKey() : event.getResult().getKey();
- 
-             serverConn.getPlayer().getConnection().write(new ClientboundCookieRequestPacket(resultedKey));
-           }
-         }, serverConn.ensureConnected().eventLoop());
- 
+@@ -195,13 +350,242 @@ public class LoginSessionHandler implements MinecraftSessionHandler {
      return true;
    }
  
@@ -594,14 +475,7 @@ index 14884af4670fe30b00ee580ea3d65fc7f6056068..d2c8bfc12b5f3c031a8f1f2f19020f8e
      if (server.getConfiguration().getPlayerInfoForwardingMode() == PlayerInfoForwarding.LEGACY) {
        resultFuture.completeExceptionally(new QuietRuntimeException(
                """
-               The connection to the remote server was unexpectedly closed.
-               This is usually because the remote server does not have \
-               BungeeCord IP forwarding correctly enabled.
-               See https://docs.papermc.io/velocity/player-information-forwarding for instructions \
-               on how to configure player info forwarding correctly."""));
-     } else {
-       resultFuture.completeExceptionally(
-           new QuietRuntimeException("The connection to the remote server was unexpectedly closed.")
+@@ -216,4 +600,9 @@ public class LoginSessionHandler implements MinecraftSessionHandler {
        );
      }
    }
@@ -612,47 +486,10 @@ index 14884af4670fe30b00ee580ea3d65fc7f6056068..d2c8bfc12b5f3c031a8f1f2f19020f8e
 +
  }
 diff --git a/proxy/src/main/java/com/velocitypowered/proxy/connection/client/AuthSessionHandler.java b/proxy/src/main/java/com/velocitypowered/proxy/connection/client/AuthSessionHandler.java
-index fee642b495fbcd95b25b34da696c7b5f14747b5d..ec9ed0bad17437a012ded54ff50dfc657e4d846b 100644
+index fee642b495fbcd95b25b34da696c7b5f14747b5d..c001bd418b5757c5d9c326de11dcea5e07dd0bdc 100644
 --- a/proxy/src/main/java/com/velocitypowered/proxy/connection/client/AuthSessionHandler.java
 +++ b/proxy/src/main/java/com/velocitypowered/proxy/connection/client/AuthSessionHandler.java
-@@ -1,295 +1,469 @@
- /*
-  * Copyright (C) 2018-2023 Velocity Contributors
-  *
-  * This program is free software: you can redistribute it and/or modify
-  * it under the terms of the GNU General Public License as published by
-  * the Free Software Foundation, either version 3 of the License, or
-  * (at your option) any later version.
-  *
-  * This program is distributed in the hope that it will be useful,
-  * but WITHOUT ANY WARRANTY; without even the implied warranty of
-  * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-  * GNU General Public License for more details.
-  *
-  * You should have received a copy of the GNU General Public License
-  * along with this program.  If not, see <https://www.gnu.org/licenses/>.
-  */
- 
- package com.velocitypowered.proxy.connection.client;
- 
- import static com.velocitypowered.api.network.ProtocolVersion.MINECRAFT_1_8;
- 
- import com.google.common.base.Preconditions;
- import com.velocitypowered.api.event.connection.DisconnectEvent;
- import com.velocitypowered.api.event.connection.LoginEvent;
- import com.velocitypowered.api.event.connection.PostLoginEvent;
- import com.velocitypowered.api.event.permission.PermissionsSetupEvent;
- import com.velocitypowered.api.event.player.CookieReceiveEvent;
- import com.velocitypowered.api.event.player.GameProfileRequestEvent;
- import com.velocitypowered.api.event.player.PlayerChooseInitialServerEvent;
- import com.velocitypowered.api.network.ProtocolVersion;
- import com.velocitypowered.api.permission.PermissionFunction;
- import com.velocitypowered.api.proxy.crypto.IdentifiedKey;
- import com.velocitypowered.api.proxy.server.RegisteredServer;
- import com.velocitypowered.api.util.GameProfile;
- import com.velocitypowered.api.util.UuidUtils;
- import com.velocitypowered.proxy.VelocityServer;
- import com.velocitypowered.proxy.config.PlayerInfoForwarding;
+@@ -38,6 +38,8 @@ import com.velocitypowered.proxy.config.PlayerInfoForwarding;
  import com.velocitypowered.proxy.config.VelocityConfiguration;
  import com.velocitypowered.proxy.connection.MinecraftConnection;
  import com.velocitypowered.proxy.connection.MinecraftSessionHandler;
@@ -661,7 +498,7 @@ index fee642b495fbcd95b25b34da696c7b5f14747b5d..ec9ed0bad17437a012ded54ff50dfc65
  import com.velocitypowered.proxy.crypto.IdentifiedKeyImpl;
  import com.velocitypowered.proxy.protocol.StateRegistry;
  import com.velocitypowered.proxy.protocol.packet.LoginAcknowledgedPacket;
- import com.velocitypowered.proxy.protocol.packet.ServerLoginSuccessPacket;
+@@ -45,6 +47,7 @@ import com.velocitypowered.proxy.protocol.packet.ServerLoginSuccessPacket;
  import com.velocitypowered.proxy.protocol.packet.ServerboundCookieResponsePacket;
  import com.velocitypowered.proxy.protocol.packet.SetCompressionPacket;
  import io.netty.buffer.ByteBuf;
@@ -669,11 +506,7 @@ index fee642b495fbcd95b25b34da696c7b5f14747b5d..ec9ed0bad17437a012ded54ff50dfc65
  import java.util.Objects;
  import java.util.Optional;
  import java.util.UUID;
- import java.util.concurrent.CompletableFuture;
- import net.kyori.adventure.text.Component;
- import net.kyori.adventure.text.format.NamedTextColor;
- import org.apache.logging.log4j.LogManager;
- import org.apache.logging.log4j.Logger;
+@@ -56,7 +59,22 @@ import org.apache.logging.log4j.Logger;
  import org.checkerframework.checker.nullness.qual.MonotonicNonNull;
  
  /**
@@ -697,13 +530,7 @@ index fee642b495fbcd95b25b34da696c7b5f14747b5d..ec9ed0bad17437a012ded54ff50dfc65
   */
  public class AuthSessionHandler implements MinecraftSessionHandler {
  
-   private static final Logger logger = LogManager.getLogger(AuthSessionHandler.class);
- 
-   private final VelocityServer server;
-   private final MinecraftConnection mcConnection;
-   private final LoginInboundConnection inbound;
-   private GameProfile profile;
-   private @MonotonicNonNull ConnectedPlayer connectedPlayer;
+@@ -70,15 +88,38 @@ public class AuthSessionHandler implements MinecraftSessionHandler {
    private final boolean onlineMode;
    private State loginState = State.START; // 1.20.2+
    private final String serverIdHash;
@@ -734,25 +561,16 @@ index fee642b495fbcd95b25b34da696c7b5f14747b5d..ec9ed0bad17437a012ded54ff50dfc65
 +      Continuation continuation) {
      this.server = Preconditions.checkNotNull(server, "server");
      this.inbound = Preconditions.checkNotNull(inbound, "inbound");
-     this.profile = Preconditions.checkNotNull(profile, "profile");
+-    this.profile = Preconditions.checkNotNull(profile, "profile");
++    this.profile = profile;
      this.onlineMode = onlineMode;
      this.mcConnection = inbound.delegatedConnection();
      this.serverIdHash = serverIdHash;
-+    this.continuation = Preconditions.checkNotNull(continuation, "continuation");
++    this.continuation = continuation;
    }
  
    @Override
-   public void activated() {
-     // Some connection types may need to alter the game profile.
-     profile = mcConnection.getType().addGameProfileTokensIfRequired(profile,
-         server.getConfiguration().getPlayerInfoForwardingMode());
-     GameProfileRequestEvent profileRequestEvent = new GameProfileRequestEvent(inbound, profile,
-         onlineMode);
-     final GameProfile finalProfile = profile;
- 
-     server.getEventManager().fire(profileRequestEvent).thenComposeAsync(profileEvent -> {
-       if (mcConnection.isClosed()) {
-         // The player disconnected after we authenticated them.
+@@ -96,10 +137,24 @@ public class AuthSessionHandler implements MinecraftSessionHandler {
          return CompletableFuture.completedFuture(null);
        }
  
@@ -761,7 +579,7 @@ index fee642b495fbcd95b25b34da696c7b5f14747b5d..ec9ed0bad17437a012ded54ff50dfc65
 -          mcConnection, inbound.getVirtualHost().orElse(null), inbound.getRawVirtualHost().orElse(null), onlineMode,
 -          inbound.getHandshakeIntent(), inbound.getIdentifiedKey());
 +      ConnectedPlayer player = switch (continuation) {
-+        case InitialServer ignored ->
++        case InitialServer _ ->
 +            // Initiate a regular connection and move over to it.
 +            new ConnectedPlayer(server, profileEvent.getGameProfile(),
 +                mcConnection, inbound.getVirtualHost().orElse(null),
@@ -781,29 +599,7 @@ index fee642b495fbcd95b25b34da696c7b5f14747b5d..ec9ed0bad17437a012ded54ff50dfc65
        this.connectedPlayer = player;
        if (!server.canRegisterConnection(player)) {
          player.disconnect0(
-             Component.translatable("velocity.error.already-connected-proxy", NamedTextColor.RED),
-             true);
-         return CompletableFuture.completedFuture(null);
-       }
- 
-       if (server.getConfiguration().isLogPlayerConnections()) {
-         logger.info("{} has connected", player);
-       }
- 
-       return server.getEventManager()
-           .fire(new PermissionsSetupEvent(player, ConnectedPlayer.DEFAULT_PERMISSIONS))
-           .thenAcceptAsync(event -> {
-             if (!mcConnection.isClosed()) {
-               // wait for permissions to load, then set the players permission function
-               final PermissionFunction function = event.createFunction(player);
-               if (function == null) {
-                 logger.error("A plugin permission provider {} provided an invalid permission "
-                         + "function for player {}. This is a bug in the plugin, not in "
-                         + "Velocity. Falling back to the default permission function.",
-                     event.getProvider().getClass().getName(), player.getUsername());
-               } else {
-                 player.setPermissionFunction(function);
-               }
+@@ -129,10 +184,22 @@ public class AuthSessionHandler implements MinecraftSessionHandler {
                startLoginCompletion(player);
              }
            }, mcConnection.eventLoop());
@@ -812,7 +608,7 @@ index fee642b495fbcd95b25b34da696c7b5f14747b5d..ec9ed0bad17437a012ded54ff50dfc65
        logger.error("Exception during connection of {}", finalProfile, ex);
 +      if (!mcConnection.isClosed()) {
 +        switch (continuation) {
-+          case InitialServer ignored -> {
++          case InitialServer _ -> {
 +          }
 +          case Relay relay ->
 +              // This also releases the authenticated target that owns the existing player.
@@ -828,49 +624,7 @@ index fee642b495fbcd95b25b34da696c7b5f14747b5d..ec9ed0bad17437a012ded54ff50dfc65
    }
  
    private void startLoginCompletion(ConnectedPlayer player) {
-     int threshold = server.getConfiguration().getCompressionThreshold();
-     if (threshold >= 0 && mcConnection.getProtocolVersion().noLessThan(MINECRAFT_1_8)) {
-       mcConnection.write(new SetCompressionPacket(threshold));
-       mcConnection.setCompressionThreshold(threshold);
-     }
-     VelocityConfiguration configuration = server.getConfiguration();
-     UUID playerUniqueId = player.getUniqueId();
-     if (configuration.getPlayerInfoForwardingMode() == PlayerInfoForwarding.NONE) {
-       playerUniqueId = UuidUtils.generateOfflinePlayerUuid(player.getUsername());
-     }
- 
-     if (player.getIdentifiedKey() != null) {
-       final IdentifiedKey playerKey = player.getIdentifiedKey();
-       if (playerKey.getSignatureHolder() == null) {
-         if (playerKey instanceof IdentifiedKeyImpl unlinkedKey) {
-           // Failsafe
-           if (!unlinkedKey.internalAddHolder(player.getUniqueId())) {
-             if (onlineMode) {
-               inbound.disconnect(
-                   Component.translatable("multiplayer.disconnect.invalid_public_key"));
-               return;
-             } else {
-               logger.warn("Key for player {} could not be verified!", player.getUsername());
-             }
-           }
-         } else {
-           logger.warn("A custom key type has been set for player " + player.getUsername());
-         }
-       } else {
-         if (!Objects.equals(playerKey.getSignatureHolder(), playerUniqueId)) {
-           logger.warn("UUID for Player {} mismatches! "
-               + "Chat/Commands signatures will not work correctly for this player!",
-                   player.getUsername());
-         }
-       }
-     }
- 
-     completeLoginProtocolPhaseAndInitialize(player);
-   }
- 
-   @Override
-   public boolean handle(LoginAcknowledgedPacket packet) {
-     if (loginState != State.SUCCESS_SENT) {
+@@ -182,14 +249,21 @@ public class AuthSessionHandler implements MinecraftSessionHandler {
        inbound.disconnect(Component.translatable("multiplayer.disconnect.invalid_player_data"));
      } else {
        loginState = State.ACKNOWLEDGED;
@@ -883,11 +637,11 @@ index fee642b495fbcd95b25b34da696c7b5f14747b5d..ec9ed0bad17437a012ded54ff50dfc65
 -        return null;
 -      });
 +      switch (continuation) {
-+        case InitialServer ignored -> {
++        case InitialServer _ -> {
 +          mcConnection.setActiveSessionHandler(StateRegistry.CONFIG,
 +              new ClientConfigSessionHandler(server, connectedPlayer));
 +          server.getEventManager().fire(new PostLoginEvent(connectedPlayer))
-+              .thenCompose(ignoredEvent -> connectToInitialServer(connectedPlayer))
++              .thenCompose(_ -> connectToInitialServer(connectedPlayer))
 +              .exceptionally(ex -> {
 +                logger.error(
 +                    "Exception while connecting {} to initial server", connectedPlayer, ex);
@@ -895,52 +649,12 @@ index fee642b495fbcd95b25b34da696c7b5f14747b5d..ec9ed0bad17437a012ded54ff50dfc65
 +              });
 +        }
 +        case Relay relay -> startRelayConfiguration(relay.backend());
-+        case Transfer ignored -> startTransfer();
++        case Transfer _ -> startTransfer();
 +      }
      }
      return true;
    }
- 
-   @Override
-   public boolean handle(ServerboundCookieResponsePacket packet) {
-     server.getEventManager()
-         .fire(new CookieReceiveEvent(connectedPlayer, packet.getKey(), packet.getPayload()))
-         .thenAcceptAsync(event -> {
-           if (event.getResult().isAllowed()) {
-             // The received cookie must have been requested by a proxy plugin in login phase,
-             // because if a backend server requests a cookie in login phase, the client is already
-             // in config phase. Therefore, the only way, we receive a CookieResponsePacket from a
-             // client in login phase is when a proxy plugin requested a cookie in login phase.
-             throw new IllegalStateException(
-                 "A cookie was requested by a proxy plugin in login phase but the response wasn't handled");
-           }
-         }, mcConnection.eventLoop());
- 
-     return true;
-   }
- 
-   private void completeLoginProtocolPhaseAndInitialize(ConnectedPlayer player) {
-     mcConnection.setAssociation(player);
- 
-     server.getEventManager().fire(new LoginEvent(player, serverIdHash)).thenAcceptAsync(event -> {
-       if (mcConnection.isClosed()) {
-         // The player was disconnected
-         server.getEventManager().fireAndForget(new DisconnectEvent(player,
-             DisconnectEvent.LoginStatus.CANCELLED_BY_USER_BEFORE_COMPLETE));
-         return;
-       }
- 
-       Optional<Component> reason = event.getResult().getReasonComponent();
-       if (reason.isPresent()) {
-         player.disconnect0(reason.get(), true);
-       } else {
-         if (!server.registerConnection(player)) {
-           player.disconnect0(Component.translatable("velocity.error.already-connected-proxy"), true);
-           return;
-         }
- 
-         ServerLoginSuccessPacket success = new ServerLoginSuccessPacket();
-         success.setUsername(player.getUsername());
+@@ -237,26 +311,99 @@ public class AuthSessionHandler implements MinecraftSessionHandler {
          success.setProperties(player.getGameProfileProperties());
          success.setUuid(player.getUniqueId());
          if (inbound.getProtocolVersion().noLessThan(ProtocolVersion.MINECRAFT_26_2)) {
@@ -948,9 +662,9 @@ index fee642b495fbcd95b25b34da696c7b5f14747b5d..ec9ed0bad17437a012ded54ff50dfc65
 +          // Minecraft 26.2 binds configuration to this session ID. A relay must forward the
 +          // target value because the target Login Success packet established that session.
 +          UUID sessionId = switch (continuation) {
-+            case InitialServer ignored -> server.getSessionId();
++            case InitialServer _ -> server.getSessionId();
 +            case Relay relay -> relay.sessionId();
-+            case Transfer ignored -> server.getSessionId();
++            case Transfer _ -> server.getSessionId();
 +          };
 +          success.setSessionId(sessionId);
          }
@@ -969,7 +683,7 @@ index fee642b495fbcd95b25b34da696c7b5f14747b5d..ec9ed0bad17437a012ded54ff50dfc65
 -            return null;
 -          });
 +          server.getEventManager().fire(new PostLoginEvent(player))
-+              .thenCompose(ignored -> connectToInitialServer(player))
++              .thenCompose(_ -> connectToInitialServer(player))
 +              .exceptionally(ex -> {
 +                logger.error("Exception while connecting {} to initial server", player, ex);
 +                return null;
@@ -981,13 +695,13 @@ index fee642b495fbcd95b25b34da696c7b5f14747b5d..ec9ed0bad17437a012ded54ff50dfc65
        logger.error("Exception while completing login initialisation phase for {}", player, ex);
 +      if (!mcConnection.isClosed()) {
 +        switch (continuation) {
-+          case InitialServer ignored -> {
++          case InitialServer _ -> {
 +          }
-+          case Relay ignored -> {
++          case Relay _ -> {
 +            // A special login cannot return to ordinary server selection after this failure.
 +            player.disconnect0(ConnectionMessages.INTERNAL_SERVER_CONNECTION_ERROR, true);
 +          }
-+          case Transfer ignored -> {
++          case Transfer _ -> {
 +            // A special login cannot return to ordinary server selection after this failure.
 +            player.disconnect0(ConnectionMessages.INTERNAL_SERVER_CONNECTION_ERROR, true);
 +          }
@@ -1050,34 +764,13 @@ index fee642b495fbcd95b25b34da696c7b5f14747b5d..ec9ed0bad17437a012ded54ff50dfc65
    }
  
    private CompletableFuture<Void> connectToInitialServer(ConnectedPlayer player) {
-     Optional<RegisteredServer> initialFromConfig = player.getNextServerToTry();
-     PlayerChooseInitialServerEvent event =
-         new PlayerChooseInitialServerEvent(player, initialFromConfig.orElse(null));
- 
-     return server.getEventManager().fire(event).thenRunAsync(() -> {
-       Optional<RegisteredServer> toTry = event.getInitialServer();
-       if (toTry.isEmpty()) {
-         player.disconnect0(
-             Component.translatable("velocity.error.no-available-servers", NamedTextColor.RED),
-             true);
-         return;
-       }
-       player.createConnectionRequest(toTry.get()).fireAndForget();
-     }, mcConnection.eventLoop());
-   }
- 
-   @Override
-   public void handleUnknown(ByteBuf buf) {
-     mcConnection.close(true);
-   }
- 
-   @Override
+@@ -285,6 +432,13 @@ public class AuthSessionHandler implements MinecraftSessionHandler {
    public void disconnected() {
      if (connectedPlayer != null) {
        connectedPlayer.teardown();
 +    } else {
 +      switch (continuation) {
-+        case InitialServer ignored -> {
++        case InitialServer _ -> {
 +        }
 +        case Relay relay -> relay.player().teardown();
 +        case Transfer transfer -> transfer.player().teardown();
@@ -1085,7 +778,7 @@ index fee642b495fbcd95b25b34da696c7b5f14747b5d..ec9ed0bad17437a012ded54ff50dfc65
      }
      this.inbound.cleanup();
    }
- 
+@@ -292,4 +446,24 @@ public class AuthSessionHandler implements MinecraftSessionHandler {
    enum State {
      START, SUCCESS_SENT, ACKNOWLEDGED
    }
@@ -1111,37 +804,10 @@ index fee642b495fbcd95b25b34da696c7b5f14747b5d..ec9ed0bad17437a012ded54ff50dfc65
 +  }
  }
 diff --git a/proxy/src/main/java/com/velocitypowered/proxy/connection/client/ClientConfigSessionHandler.java b/proxy/src/main/java/com/velocitypowered/proxy/connection/client/ClientConfigSessionHandler.java
-index e4c754f9a28f5cac0ed43fe294fae5bd8e1a5acd..bd6ae199788102aff9fe9b0fe727d3d700bb4beb 100644
+index b86041035bb282c880fc388d47e2a5aee6dc128d..4dea78d181f1351ea6ea8b39f560c25dc66f6bae 100644
 --- a/proxy/src/main/java/com/velocitypowered/proxy/connection/client/ClientConfigSessionHandler.java
 +++ b/proxy/src/main/java/com/velocitypowered/proxy/connection/client/ClientConfigSessionHandler.java
-@@ -1,312 +1,381 @@
- /*
-  * Copyright (C) 2018-2023 Velocity Contributors
-  *
-  * This program is free software: you can redistribute it and/or modify
-  * it under the terms of the GNU General Public License as published by
-  * the Free Software Foundation, either version 3 of the License, or
-  * (at your option) any later version.
-  *
-  * This program is distributed in the hope that it will be useful,
-  * but WITHOUT ANY WARRANTY; without even the implied warranty of
-  * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-  * GNU General Public License for more details.
-  *
-  * You should have received a copy of the GNU General Public License
-  * along with this program.  If not, see <https://www.gnu.org/licenses/>.
-  */
- 
- package com.velocitypowered.proxy.connection.client;
- 
- import com.velocitypowered.api.event.connection.PluginMessageEvent;
- import com.velocitypowered.api.event.player.CookieReceiveEvent;
- import com.velocitypowered.api.event.player.PlayerClientBrandEvent;
- import com.velocitypowered.api.event.player.configuration.PlayerConfigurationEvent;
- import com.velocitypowered.api.event.player.configuration.PlayerFinishConfigurationEvent;
- import com.velocitypowered.api.event.player.configuration.PlayerFinishedConfigurationEvent;
- import com.velocitypowered.api.proxy.messages.ChannelIdentifier;
- import com.velocitypowered.proxy.VelocityServer;
+@@ -28,8 +28,10 @@ import com.velocitypowered.proxy.VelocityServer;
  import com.velocitypowered.proxy.connection.MinecraftConnection;
  import com.velocitypowered.proxy.connection.MinecraftSessionHandler;
  import com.velocitypowered.proxy.connection.backend.BungeeCordMessageResponder;
@@ -1152,26 +818,7 @@ index e4c754f9a28f5cac0ed43fe294fae5bd8e1a5acd..bd6ae199788102aff9fe9b0fe727d3d7
  import com.velocitypowered.proxy.protocol.MinecraftPacket;
  import com.velocitypowered.proxy.protocol.ProtocolUtils;
  import com.velocitypowered.proxy.protocol.StateRegistry;
- import com.velocitypowered.proxy.protocol.netty.MinecraftDecoder;
- import com.velocitypowered.proxy.protocol.netty.MinecraftEncoder;
- import com.velocitypowered.proxy.protocol.packet.ClientSettingsPacket;
- import com.velocitypowered.proxy.protocol.packet.KeepAlivePacket;
- import com.velocitypowered.proxy.protocol.packet.PingIdentifyPacket;
- import com.velocitypowered.proxy.protocol.packet.PluginMessagePacket;
- import com.velocitypowered.proxy.protocol.packet.ResourcePackResponsePacket;
- import com.velocitypowered.proxy.protocol.packet.ServerboundCookieResponsePacket;
- import com.velocitypowered.proxy.protocol.packet.ServerboundCustomClickActionPacket;
- import com.velocitypowered.proxy.protocol.packet.config.CodeOfConductAcceptPacket;
- import com.velocitypowered.proxy.protocol.packet.config.FinishedUpdatePacket;
- import com.velocitypowered.proxy.protocol.packet.config.KnownPacksPacket;
- import com.velocitypowered.proxy.protocol.util.PluginMessageUtil;
- import io.netty.buffer.ByteBuf;
- import io.netty.buffer.ByteBufUtil;
- import io.netty.buffer.Unpooled;
- import java.util.concurrent.CompletableFuture;
- import java.util.concurrent.TimeUnit;
- import net.kyori.adventure.key.Key;
- import net.kyori.adventure.text.Component;
+@@ -57,9 +59,16 @@ import net.kyori.adventure.text.Component;
  import net.kyori.adventure.text.format.NamedTextColor;
  import org.apache.logging.log4j.LogManager;
  import org.apache.logging.log4j.Logger;
@@ -1189,8 +836,7 @@ index e4c754f9a28f5cac0ed43fe294fae5bd8e1a5acd..bd6ae199788102aff9fe9b0fe727d3d7
   */
  public class ClientConfigSessionHandler implements MinecraftSessionHandler {
    private static final boolean BACKPRESSURE_LOG =
-       Boolean.getBoolean("velocity.log-server-backpressure");
- 
+@@ -68,6 +77,8 @@ public class ClientConfigSessionHandler implements MinecraftSessionHandler {
    private static final Logger logger = LogManager.getLogger(ClientConfigSessionHandler.class);
    private final VelocityServer server;
    private final ConnectedPlayer player;
@@ -1199,14 +845,7 @@ index e4c754f9a28f5cac0ed43fe294fae5bd8e1a5acd..bd6ae199788102aff9fe9b0fe727d3d7
    private String brandChannel = null;
  
    private CompletableFuture<?> configurationFuture;
-   private CompletableFuture<Void> configSwitchFuture;
- 
-   /**
-    * Constructs a client config session handler.
-    *
-    * @param server the Velocity server instance
-    * @param player the player
-    */
+@@ -82,6 +93,32 @@ public class ClientConfigSessionHandler implements MinecraftSessionHandler {
    public ClientConfigSessionHandler(VelocityServer server, ConnectedPlayer player) {
      this.server = server;
      this.player = player;
@@ -1234,26 +873,12 @@ index e4c754f9a28f5cac0ed43fe294fae5bd8e1a5acd..bd6ae199788102aff9fe9b0fe727d3d7
 +    this.relaySettingsFuture = settingsFuture;
 +    // Successful PostLogin completion and the first settings packet form a one-shot barrier.
 +    relayPostLoginFuture.thenAcceptBothAsync(settingsFuture,
-+        (ignored, settings) -> scheduleRelayConfiguration(relayBackend, settings),
++        (_, settings) -> scheduleRelayConfiguration(relayBackend, settings),
 +        player.getConnection().eventLoop());
    }
  
    @Override
-   public void activated() {
-     configSwitchFuture = new CompletableFuture<>();
-   }
- 
-   @Override
-   public void deactivated() {
-     configurationFuture = null;
-   }
- 
-   @Override
-   public boolean handle(final KeepAlivePacket packet) {
-     player.forwardKeepAlive(packet);
-     return true;
-   }
- 
+@@ -103,6 +140,11 @@ public class ClientConfigSessionHandler implements MinecraftSessionHandler {
    @Override
    public boolean handle(ClientSettingsPacket packet) {
      player.setClientSettings(packet);
@@ -1265,128 +890,7 @@ index e4c754f9a28f5cac0ed43fe294fae5bd8e1a5acd..bd6ae199788102aff9fe9b0fe727d3d7
      return true;
    }
  
-   @Override
-   public boolean handle(ResourcePackResponsePacket packet) {
-     return player.resourcePackHandler().onResourcePackResponse(
-         new ResourcePackResponseBundle(packet.getId(),
-             packet.getHash(),
-             packet.getStatus())
-     );
-   }
- 
-   @Override
-   public boolean handle(FinishedUpdatePacket packet) {
-     player.getConnection().setActiveSessionHandler(StateRegistry.PLAY, new ClientPlaySessionHandler(server, player));
- 
-     configSwitchFuture.complete(null);
-     return true;
-   }
- 
-   @Override
-   public boolean handle(final PluginMessagePacket packet) {
-     final VelocityServerConnection serverConn = player.getConnectionInFlight();
-     if (PluginMessageUtil.isMcBrand(packet)) {
-       final String brand = PluginMessageUtil.readBrandMessage(packet.content());
-       server.getEventManager().fireAndForget(new PlayerClientBrandEvent(player, brand));
-       player.setClientBrand(brand);
-       brandChannel = packet.getChannel();
-       // Client sends `minecraft:brand` packet immediately after Login,
-       // but at this time the backend server may not be ready
-     } else if (BungeeCordMessageResponder.isBungeeCordMessage(packet)) {
-       return true;
-     } else if (serverConn != null) {
-       byte[] bytes = ByteBufUtil.getBytes(packet.content());
-       ChannelIdentifier id = this.server.getChannelRegistrar().getFromId(packet.getChannel());
- 
-       if (id == null) {
-         serverConn.ensureConnected().write(packet.retain());
-         return true;
-       }
- 
-       // Handling this stuff async means that we should probably pause
-       // the connection while we toss this off into another pool
-       serverConn.getPlayer().getConnection().setAutoReading(false);
-       this.server.getEventManager()
-           .fire(new PluginMessageEvent(serverConn.getPlayer(), serverConn, id, bytes))
-           .thenAcceptAsync(pme -> {
-             if (pme.getResult().isAllowed() && serverConn.getConnection() != null) {
-               serverConn.ensureConnected().write(new PluginMessagePacket(
-                   pme.getIdentifier().getId(), Unpooled.wrappedBuffer(bytes)));
-             }
-             serverConn.getPlayer().getConnection().setAutoReading(true);
-           }, player.getConnection().eventLoop()).exceptionally((ex) -> {
-             logger.error("Exception while handling plugin message packet for {}", player, ex);
-             return null;
-           });
-     }
-     return true;
-   }
- 
-   @Override
-   public boolean handle(PingIdentifyPacket packet) {
-     if (player.getConnectionInFlight() != null) {
-       player.getConnectionInFlight().ensureConnected().write(packet);
-       return true;
-     }
- 
-     return false;
-   }
- 
-   @Override
-   public boolean handle(KnownPacksPacket packet) {
-     callConfigurationEvent().thenRun(() -> {
-       VelocityServerConnection targetServer =
-           player.getConnectionInFlightOrConnectedServer();
-       if (targetServer != null) {
-         targetServer.ensureConnected().write(packet);
-       }
-     }).exceptionally(ex -> {
-       logger.error("Error forwarding known packs response to backend:", ex);
-       return null;
-     });
- 
-     return true;
-   }
- 
-   @Override
-   public boolean handle(ServerboundCookieResponsePacket packet) {
-     server.getEventManager()
-         .fire(new CookieReceiveEvent(player, packet.getKey(), packet.getPayload()))
-         .thenAcceptAsync(event -> {
-           if (event.getResult().isAllowed()) {
-             final VelocityServerConnection serverConnection = player.getConnectionInFlight();
-             if (serverConnection != null) {
-               final Key resultedKey = event.getResult().getKey() == null
-                   ? event.getOriginalKey() : event.getResult().getKey();
-               final byte[] resultedData = event.getResult().getData() == null
-                   ? event.getOriginalData() : event.getResult().getData();
- 
-               serverConnection.ensureConnected()
-                   .write(new ServerboundCookieResponsePacket(resultedKey, resultedData));
-             }
-           }
-         }, player.getConnection().eventLoop());
- 
-     return true;
-   }
- 
-   @Override
-   public boolean handle(ServerboundCustomClickActionPacket packet) {
-     if (player.getConnectionInFlight() != null) {
-       player.getConnectionInFlight().ensureConnected().write(packet.retain());
-       return true;
-     }
- 
-     return false;
-   }
- 
-   @Override
-   public boolean handle(CodeOfConductAcceptPacket packet) {
-     if (this.player.getConnectionInFlight() != null) {
-       this.player.getConnectionInFlight().ensureConnected().write(packet);
-       return true;
-     }
- 
+@@ -232,6 +274,33 @@ public class ClientConfigSessionHandler implements MinecraftSessionHandler {
      return false;
    }
  
@@ -1420,165 +924,11 @@ index e4c754f9a28f5cac0ed43fe294fae5bd8e1a5acd..bd6ae199788102aff9fe9b0fe727d3d7
    @Override
    public void handleGeneric(MinecraftPacket packet) {
      VelocityServerConnection serverConnection = player.getConnectedServer();
-     if (serverConnection == null) {
-       // No server connection yet, probably transitioning.
-       return;
-     }
- 
-     MinecraftConnection smc = serverConnection.getConnection();
-     if (smc != null && serverConnection.getPhase().consideredComplete()) {
-       if (packet instanceof PluginMessagePacket) {
-         ((PluginMessagePacket) packet).retain();
-       }
-       smc.write(packet);
-     }
-   }
- 
-   @Override
-   public void handleUnknown(ByteBuf buf) {
-     final VelocityServerConnection serverConnection = player.getConnectedServer();
-     if (serverConnection == null) {
-       // No server connection yet, probably transitioning.
-       return;
-     }
- 
-     final MinecraftConnection smc = serverConnection.getConnection();
-     if (smc != null && !smc.isClosed() && serverConnection.getPhase().consideredComplete()) {
-       smc.write(buf.retain());
-     }
-   }
- 
-   @Override
-   public void disconnected() {
-     player.teardown();
-   }
- 
-   @Override
-   public void exception(Throwable throwable) {
-     player.disconnect(Component.translatable("velocity.error.player-connection-error", NamedTextColor.RED));
-     if (MinecraftDecoder.DEBUG) {
-       logger.info("Exception while handling packet for {}", player, throwable);
-     }
-   }
- 
-   @Override
-   public void writabilityChanged() {
-     final boolean writable = player.getConnection().getChannel().isWritable();
- 
-     if (BACKPRESSURE_LOG) {
-       if (writable) {
-         logger.info("{} is writable, will auto-read backend connection data", player);
-       } else {
-         logger.info("{} is not writable, not auto-reading backend connection data", player);
-       }
-     }
- 
-     if (!writable) {
-       // Flush pending packets to free up memory. Schedule on a future event loop invocation
-       // to avoid disabling auto-read while the flush resolves backpressure.
-       player.getConnection().eventLoop().execute(() -> player.getConnection().flush());
-     }
- 
-     final VelocityServerConnection serverConn = player.getConnectionInFlightOrConnectedServer();
-     if (serverConn != null) {
-       final MinecraftConnection smc = serverConn.getConnection();
-       if (smc != null) {
-         smc.setAutoReading(writable);
-       }
-     }
-   }
- 
-   /**
-    * Calls the {@link PlayerConfigurationEvent}.
-    * For 1.20.5+ backends this is done when the client responds to
-    * the known packs request. The response is delayed until the event
-    * has been called.
-    * For 1.20.2-1.20.4 servers this is done when the client acknowledges
-    * the end of the configuration.
-    * This is handled differently because for 1.20.5+ servers can't keep
-    * their connection alive between states and older servers don't have
 diff --git a/proxy/src/main/java/com/velocitypowered/proxy/connection/client/ConnectedPlayer.java b/proxy/src/main/java/com/velocitypowered/proxy/connection/client/ConnectedPlayer.java
-index e28b7c9406c790c7c5873f4eb704b5e09d685a2f..b08abe9d822ccc1d64f5573d26ba21d250f062f9 100644
+index e28b7c9406c790c7c5873f4eb704b5e09d685a2f..8edacd602d5496bf25b2f80f82fcaf78eda7346f 100644
 --- a/proxy/src/main/java/com/velocitypowered/proxy/connection/client/ConnectedPlayer.java
 +++ b/proxy/src/main/java/com/velocitypowered/proxy/connection/client/ConnectedPlayer.java
-@@ -235,160 +235,172 @@ public class ConnectedPlayer implements MinecraftConnectionAssociation, Player,
-   public void disconnected() {
-     for (final VelocityBossBarImplementation bar : this.bossBars) {
-       bar.viewerDisconnected(this);
-     }
-   }
- 
-   public ChatBuilderFactory getChatBuilderFactory() {
-     return chatBuilderFactory;
-   }
- 
-   public ChatQueue getChatQueue() {
-     return chatQueue;
-   }
- 
-   /**
-    * Discards any messages still being processed by the {@link ChatQueue}, and creates a fresh state for future packets.
-    * This should be used on server switches, or whenever the client resets its own 'last seen' state.
-    */
-   public void discardChatQueue() {
-     // No need for atomic swap, should only be called from event loop
-     final ChatQueue oldChatQueue = chatQueue;
-     chatQueue = new ChatQueue(this);
-     oldChatQueue.close();
-   }
- 
-   public BundleDelimiterHandler getBundleHandler() {
-     return this.bundleHandler;
-   }
- 
-   @Override
-   public @NonNull Identity identity() {
-     return Identity.identity(this.getUniqueId());
-   }
- 
-   @Override
-   public String getUsername() {
-     return profile.getName();
-   }
- 
-   @Override
-   public Locale getEffectiveLocale() {
-     if (effectiveLocale == null && settings != null) {
-       return settings.getLocale();
-     }
-     return effectiveLocale;
-   }
- 
-   @Override
-   public void setEffectiveLocale(final @Nullable Locale locale) {
-     effectiveLocale = locale;
-   }
- 
-   @Override
-   public UUID getUniqueId() {
-     return profile.getId();
-   }
- 
-   @Override
-   public Optional<ServerConnection> getCurrentServer() {
-     return Optional.ofNullable(connectedServer);
-   }
- 
-   /**
-    * Makes sure the player is connected to a server and returns the server they are connected to.
-    *
-    * @return the server the player is connected to
-    */
-   public VelocityServerConnection ensureAndGetCurrentServer() {
-     VelocityServerConnection con = this.connectedServer;
-     if (con == null) {
-       throw new IllegalStateException("Not connected to server!");
-     }
-     return con;
-   }
- 
-   @Override
-   public GameProfile getGameProfile() {
+@@ -312,6 +312,18 @@ public class ConnectedPlayer implements MinecraftConnectionAssociation, Player,
      return profile;
    }
  
@@ -1591,167 +941,13 @@ index e28b7c9406c790c7c5873f4eb704b5e09d685a2f..b08abe9d822ccc1d64f5573d26ba21d2
 +   * @param profile the final profile after the profile request event
 +   */
 +  void replaceGameProfile(GameProfile profile) {
-+    this.profile = Preconditions.checkNotNull(profile, "profile");
++    this.profile = profile;
 +  }
 +
    public MinecraftConnection getConnection() {
      return connection;
    }
- 
-   @Override
-   public long getPing() {
-     return this.ping;
-   }
- 
-   void setPing(long ping) {
-     this.ping = ping;
-   }
- 
-   @Override
-   public boolean isOnlineMode() {
-     return onlineMode;
-   }
- 
-   @Override
-   public PlayerSettings getPlayerSettings() {
-     return settings == null ? ClientSettingsWrapper.DEFAULT : this.settings;
-   }
- 
-   @Nullable
-   public ClientSettingsPacket getClientSettingsPacket() {
-     return clientSettingsPacket;
-   }
- 
-   @Override
-   public boolean hasSentPlayerSettings() {
-     return settings != null;
-   }
- 
-   /**
-    * Sets player settings.
-    *
-    * @param clientSettingsPacket the player settings packet
-    */
-   public void setClientSettings(final ClientSettingsPacket clientSettingsPacket) {
-     this.clientSettingsPacket = clientSettingsPacket;
-     final ClientSettingsWrapper cs = new ClientSettingsWrapper(clientSettingsPacket);
-     this.settings = cs;
-     server.getEventManager().fireAndForget(new PlayerSettingsChangedEvent(this, cs));
-   }
- 
-   @Override
-   public Optional<ModInfo> getModInfo() {
-     return Optional.ofNullable(modInfo);
-   }
- 
-   public void setModInfo(ModInfo modInfo) {
-     this.modInfo = modInfo;
-     server.getEventManager().fireAndForget(new PlayerModInfoEvent(this, modInfo));
-   }
- 
-   @Override
-   public @NotNull Pointers pointers() {
-     return POINTERS_SUPPLIER.view(this);
-   }
- 
-   @Override
-   public InetSocketAddress getRemoteAddress() {
-     return (InetSocketAddress) connection.getRemoteAddress();
-   }
- 
-   @Override
-   public Optional<InetSocketAddress> getVirtualHost() {
-     return Optional.ofNullable(virtualHost);
-   }
- 
-   @Override
-   public Optional<String> getRawVirtualHost() {
-     return Optional.ofNullable(rawVirtualHost);
-   }
- 
-   void setPermissionFunction(PermissionFunction permissionFunction) {
-     this.permissionFunction = permissionFunction;
-   }
- 
-   @Override
-@@ -592,160 +604,179 @@ public class ConnectedPlayer implements MinecraftConnectionAssociation, Player,
-   @Override
-   public ConnectionRequestBuilder createConnectionRequest(RegisteredServer server) {
-     return new ConnectionRequestBuilderImpl(server, this.connectedServer);
-   }
- 
-   private ConnectionRequestBuilder createConnectionRequest(RegisteredServer server,
-       @Nullable VelocityServerConnection previousConnection) {
-     return new ConnectionRequestBuilderImpl(server, previousConnection);
-   }
- 
-   @Override
-   public List<GameProfile.Property> getGameProfileProperties() {
-     return this.profile.getProperties();
-   }
- 
-   @Override
-   public void setGameProfileProperties(List<GameProfile.Property> properties) {
-     this.profile = profile.withProperties(Preconditions.checkNotNull(properties));
-   }
- 
-   @Override
-   public void clearPlayerListHeaderAndFooter() {
-     clearPlayerListHeaderAndFooterSilent();
-     if (this.getProtocolVersion().noLessThan(ProtocolVersion.MINECRAFT_1_8)) {
-       this.connection.write(HeaderAndFooterPacket.reset(this.getProtocolVersion()));
-     }
-   }
- 
-   public void clearPlayerListHeaderAndFooterSilent() {
-     this.playerListHeader = Component.empty();
-     this.playerListFooter = Component.empty();
-   }
- 
-   @Override
-   public InternalTabList getTabList() {
-     return tabList;
-   }
- 
-   @Override
-   public void disconnect(@NotNull Component reason) {
-     Objects.requireNonNull(reason, "reason");
-     if (connection.eventLoop().inEventLoop()) {
-       disconnect0(reason, false);
-     } else {
-       connection.eventLoop().execute(() -> disconnect0(reason, false));
-     }
-   }
- 
-   /**
-    * Disconnects the player from the proxy.
-    *
-    * @param reason      the reason for disconnecting the player
-    * @param duringLogin whether the disconnect happened during login
-    */
-   public void disconnect0(Component reason, boolean duringLogin) {
-     Component translated = this.translateMessage(reason);
- 
-     if (server.getConfiguration().isLogPlayerConnections()) {
-       logger.info(Component.text(this + " has disconnected: ").append(translated));
-     }
-     connection.closeWith(DisconnectPacket.create(translated,
-             this.getProtocolVersion(), connection.getState()));
-   }
- 
-   public @Nullable VelocityServerConnection getConnectedServer() {
-     return connectedServer;
-   }
- 
-   public @Nullable VelocityServerConnection getConnectionInFlight() {
-     return connectionInFlight;
-   }
- 
-   public VelocityServerConnection getConnectionInFlightOrConnectedServer() {
-     return connectionInFlight != null ? connectionInFlight : connectedServer;
-   }
- 
-   public void resetInFlightConnection() {
+@@ -669,6 +681,25 @@ public class ConnectedPlayer implements MinecraftConnectionAssociation, Player,
      connectionInFlight = null;
    }
  
@@ -1777,110 +973,11 @@ index e28b7c9406c790c7c5873f4eb704b5e09d685a2f..b08abe9d822ccc1d64f5573d26ba21d2
    /**
     * Handles unexpected disconnects.
     *
-    * @param server    the server we disconnected from
-    * @param throwable the exception
-    * @param safe      whether or not we can safely reconnect to a new server
-    */
-   public void handleConnectionException(RegisteredServer server, Throwable throwable,
-                                         boolean safe) {
-     if (!isActive()) {
-       // If the connection is no longer active, it makes no sense to try and recover it.
-       return;
-     }
- 
-     if (throwable == null) {
-       throw new NullPointerException("throwable");
-     }
- 
-     Throwable wrapped = throwable;
-     if (throwable instanceof CompletionException) {
-       Throwable cause = throwable.getCause();
-       if (cause != null) {
-         wrapped = cause;
-       }
-     }
- 
-     Component friendlyError;
-     if (connectedServer != null && connectedServer.getServerInfo().equals(server.getServerInfo())) {
-       friendlyError = Component.translatable("velocity.error.connected-server-error",
-               Argument.string("server", server.getServerInfo().getName()));
-     } else {
-       logger.error("{}: unable to connect to server {}", this, server.getServerInfo().getName(),
-           wrapped);
-       friendlyError = Component.translatable("velocity.error.connecting-server-error",
-               Argument.string("server", server.getServerInfo().getName()));
-     }
-     handleConnectionException(server, null, friendlyError.color(NamedTextColor.RED), safe);
-   }
- 
-   /**
-    * Handles unexpected disconnects.
-    *
-    * @param server     the server we disconnected from
-    * @param disconnect the disconnect packet
-    * @param safe       whether or not we can safely reconnect to a new server
-    */
-   public void handleConnectionException(RegisteredServer server, DisconnectPacket disconnect,
-                                         boolean safe) {
-     if (!isActive()) {
-       // If the connection is no longer active, it makes no sense to try and recover it.
-       return;
-     }
- 
-     Component disconnectReason = disconnect.getReason().getComponent();
-     String plainTextReason = PASS_THRU_TRANSLATE.serialize(disconnectReason);
-     if (connectedServer != null && connectedServer.getServerInfo().equals(server.getServerInfo())) {
-       if (this.server.getConfiguration().isLogPlayerConnections()) {
-         logger.info("{}: kicked from server {}: {}", this, server.getServerInfo().getName(),
-             plainTextReason);
-       }
-       handleConnectionException(server, disconnectReason,
-           Component.translatable("velocity.error.moved-to-new-server", NamedTextColor.RED,
-               Argument.string("server", server.getServerInfo().getName()),
-               disconnectReason), safe);
-     } else {
-       if (this.server.getConfiguration().isLogPlayerConnections()) {
-         logger.error("{}: disconnected while connecting to {}: {}", this,
-             server.getServerInfo().getName(), plainTextReason);
-       }
-       handleConnectionException(server, disconnectReason,
-           Component.translatable("velocity.error.cant-connect", NamedTextColor.RED,
-               Argument.string("server", server.getServerInfo().getName()),
-               disconnectReason), safe);
-     }
-   }
- 
-   private void handleConnectionException(RegisteredServer rs,
-                                          @Nullable Component kickReason, Component friendlyReason,
-                                          boolean safe) {
-     if (!isActive()) {
 diff --git a/proxy/src/main/java/com/velocitypowered/proxy/connection/client/HandshakeSessionHandler.java b/proxy/src/main/java/com/velocitypowered/proxy/connection/client/HandshakeSessionHandler.java
-index 83919b856bd5114a8e98d3529283b2ff6ac47a1a..ec5756223a9d041013a31fa77f08fb582500a765 100644
+index 83919b856bd5114a8e98d3529283b2ff6ac47a1a..437517da9ecf116f9fc97ecc523ce13ed5a6740a 100644
 --- a/proxy/src/main/java/com/velocitypowered/proxy/connection/client/HandshakeSessionHandler.java
 +++ b/proxy/src/main/java/com/velocitypowered/proxy/connection/client/HandshakeSessionHandler.java
-@@ -1,197 +1,276 @@
- /*
-  * Copyright (C) 2018-2023 Velocity Contributors
-  *
-  * This program is free software: you can redistribute it and/or modify
-  * it under the terms of the GNU General Public License as published by
-  * the Free Software Foundation, either version 3 of the License, or
-  * (at your option) any later version.
-  *
-  * This program is distributed in the hope that it will be useful,
-  * but WITHOUT ANY WARRANTY; without even the implied warranty of
-  * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-  * GNU General Public License for more details.
-  *
-  * You should have received a copy of the GNU General Public License
-  * along with this program.  If not, see <https://www.gnu.org/licenses/>.
-  */
- 
- package com.velocitypowered.proxy.connection.client;
- 
- import com.google.common.annotations.VisibleForTesting;
- import com.google.common.base.Preconditions;
- import com.velocitypowered.api.event.connection.ConnectionHandshakeEvent;
+@@ -23,6 +23,7 @@ import com.velocitypowered.api.event.connection.ConnectionHandshakeEvent;
  import com.velocitypowered.api.network.HandshakeIntent;
  import com.velocitypowered.api.network.ProtocolState;
  import com.velocitypowered.api.network.ProtocolVersion;
@@ -1888,19 +985,7 @@ index 83919b856bd5114a8e98d3529283b2ff6ac47a1a..ec5756223a9d041013a31fa77f08fb58
  import com.velocitypowered.proxy.VelocityServer;
  import com.velocitypowered.proxy.config.PlayerInfoForwarding;
  import com.velocitypowered.proxy.connection.ConnectionType;
- import com.velocitypowered.proxy.connection.ConnectionTypes;
- import com.velocitypowered.proxy.connection.MinecraftConnection;
- import com.velocitypowered.proxy.connection.MinecraftSessionHandler;
- import com.velocitypowered.proxy.connection.forge.legacy.LegacyForgeConstants;
- import com.velocitypowered.proxy.connection.forge.modern.ModernForgeConnectionType;
- import com.velocitypowered.proxy.connection.forge.modern.ModernForgeConstants;
- import com.velocitypowered.proxy.connection.util.VelocityInboundConnection;
- import com.velocitypowered.proxy.protocol.MinecraftPacket;
- import com.velocitypowered.proxy.protocol.StateRegistry;
- import com.velocitypowered.proxy.protocol.packet.HandshakePacket;
- import com.velocitypowered.proxy.protocol.packet.LegacyDisconnect;
- import com.velocitypowered.proxy.protocol.packet.LegacyHandshakePacket;
- import com.velocitypowered.proxy.protocol.packet.LegacyPingPacket;
+@@ -42,6 +43,7 @@ import com.velocitypowered.proxy.protocol.packet.LegacyPingPacket;
  import io.netty.buffer.ByteBuf;
  import java.net.InetAddress;
  import java.net.InetSocketAddress;
@@ -1908,9 +993,7 @@ index 83919b856bd5114a8e98d3529283b2ff6ac47a1a..ec5756223a9d041013a31fa77f08fb58
  import java.util.Optional;
  import net.kyori.adventure.text.Component;
  import net.kyori.adventure.text.format.NamedTextColor;
- import org.apache.logging.log4j.LogManager;
- import org.apache.logging.log4j.Logger;
- import org.checkerframework.checker.nullness.qual.Nullable;
+@@ -51,8 +53,8 @@ import org.checkerframework.checker.nullness.qual.Nullable;
  
  /**
   * The initial handler used when a connection is established to the proxy. This will either
@@ -1921,7 +1004,7 @@ index 83919b856bd5114a8e98d3529283b2ff6ac47a1a..ec5756223a9d041013a31fa77f08fb58
   */
  public class HandshakeSessionHandler implements MinecraftSessionHandler {
  
-   private static final Logger LOGGER = LogManager.getLogger(HandshakeSessionHandler.class);
+@@ -60,10 +62,41 @@ public class HandshakeSessionHandler implements MinecraftSessionHandler {
  
    private final MinecraftConnection connection;
    private final VelocityServer server;
@@ -1959,34 +1042,11 @@ index 83919b856bd5114a8e98d3529283b2ff6ac47a1a..ec5756223a9d041013a31fa77f08fb58
 +      TransferTunnelLoginSessionHandler.TargetConnector targetConnector) {
      this.connection = Preconditions.checkNotNull(connection, "connection");
      this.server = Preconditions.checkNotNull(server, "server");
-+    this.targetConnector = Preconditions.checkNotNull(targetConnector, "targetConnector");
++    this.targetConnector = targetConnector;
    }
  
    @Override
-   public boolean handle(LegacyPingPacket packet) {
-     connection.setProtocolVersion(ProtocolVersion.LEGACY);
-     final StatusSessionHandler handler =
-         new StatusSessionHandler(server, new LegacyInboundConnection(connection, packet));
-     connection.setActiveSessionHandler(StateRegistry.STATUS, handler);
-     handler.handle(packet);
-     return true;
-   }
- 
-   @Override
-   public boolean handle(LegacyHandshakePacket packet) {
-     connection.closeWith(LegacyDisconnect.from(Component.text(
-         "Your client is extremely old. Please update to a newer version of Minecraft.",
-         NamedTextColor.RED)
-     ));
-     return true;
-   }
- 
-   @Override
-   public boolean handle(final HandshakePacket handshake) {
-     final StateRegistry nextState = getStateForProtocol(handshake.getNextStatus());
-     if (nextState == null) {
-       LOGGER.error("{} provided invalid protocol {}", this, handshake.getNextStatus());
-       connection.close(true);
+@@ -94,9 +127,10 @@ public class HandshakeSessionHandler implements MinecraftSessionHandler {
      } else {
        final InitialInboundConnection ic = new InitialInboundConnection(connection,
                cleanVhost(handshake.getServerAddress()), handshake);
@@ -2000,18 +1060,7 @@ index 83919b856bd5114a8e98d3529283b2ff6ac47a1a..ec5756223a9d041013a31fa77f08fb58
          return true;
        }
        connection.setProtocolVersion(handshake.getProtocolVersion());
-       connection.setAssociation(ic);
- 
-       switch (nextState) {
-         case STATUS -> connection.setActiveSessionHandler(StateRegistry.STATUS,
-               new StatusSessionHandler(server, ic));
-         case LOGIN -> this.handleLogin(handshake, ic);
-         default ->
-           // If you get this, it's a bug in Velocity.
-           throw new AssertionError("getStateForProtocol provided invalid state!");
-       }
-     }
- 
+@@ -115,6 +149,51 @@ public class HandshakeSessionHandler implements MinecraftSessionHandler {
      return true;
    }
  
@@ -2063,104 +1112,11 @@ index 83919b856bd5114a8e98d3529283b2ff6ac47a1a..ec5756223a9d041013a31fa77f08fb58
    private static @Nullable StateRegistry getStateForProtocol(int status) {
      return switch (status) {
        case StateRegistry.STATUS_ID -> StateRegistry.STATUS;
-       case StateRegistry.LOGIN_ID, StateRegistry.TRANSFER_ID -> StateRegistry.LOGIN;
-       default -> null;
-     };
-   }
- 
-   private void handleLogin(HandshakePacket handshake, InitialInboundConnection ic) {
-     if (!handshake.getProtocolVersion().isSupported()) {
-       // Bump connection into correct protocol state so that we can send the disconnect packet.
-       connection.setState(StateRegistry.LOGIN);
-       ic.disconnectQuietly(Component.translatable(
-           "multiplayer.disconnect.outdated_client",
-           Component.text(ProtocolVersion.SUPPORTED_VERSION_STRING)
-       ));
-       return;
-     }
- 
-     final InetAddress address = ((InetSocketAddress) connection.getRemoteAddress()).getAddress();
-     if (!server.getIpAttemptLimiter().attempt(address)) {
-       // Bump connection into correct protocol state so that we can send the disconnect packet.
-       connection.setState(StateRegistry.LOGIN);
-       ic.disconnectQuietly(Component.translatable("velocity.error.logging-in-too-fast"));
-       return;
-     }
- 
-     connection.setType(getHandshakeConnectionType(handshake));
- 
-     // If the proxy is configured for modern forwarding, we must deny connections from 1.12.2
-     // and lower, otherwise IP information will never get forwarded.
-     if (server.getConfiguration().getPlayerInfoForwardingMode() == PlayerInfoForwarding.MODERN
-         && handshake.getProtocolVersion().lessThan(ProtocolVersion.MINECRAFT_1_13)) {
-       // Bump connection into correct protocol state so that we can send the disconnect packet.
-       connection.setState(StateRegistry.LOGIN);
-       ic.disconnectQuietly(
-           Component.translatable("velocity.error.modern-forwarding-needs-new-client"));
-       return;
-     }
- 
-     final LoginInboundConnection lic = new LoginInboundConnection(ic);
-     server.getEventManager().fireAndForget(
-             new ConnectionHandshakeEvent(lic, handshake.getIntent()));
-     connection.setActiveSessionHandler(StateRegistry.LOGIN,
-         new InitialLoginSessionHandler(server, connection, lic));
-   }
- 
-   private ConnectionType getHandshakeConnectionType(HandshakePacket handshake) {
-     if (handshake.getServerAddress().contains(ModernForgeConstants.MODERN_FORGE_TOKEN)
-             && handshake.getProtocolVersion().noLessThan(ProtocolVersion.MINECRAFT_1_20_2)) {
-       return new ModernForgeConnectionType(handshake.getServerAddress());
-     }
-     // Determine if we're using Forge (1.8 to 1.12, may not be the case in 1.13).
-     if (handshake.getServerAddress().endsWith(LegacyForgeConstants.HANDSHAKE_HOSTNAME_TOKEN)
-         && handshake.getProtocolVersion().lessThan(ProtocolVersion.MINECRAFT_1_13)) {
-       return ConnectionTypes.LEGACY_FORGE;
-     } else if (handshake.getProtocolVersion().noGreaterThan(ProtocolVersion.MINECRAFT_1_7_6)) {
-       // 1.7 Forge will not notify us during handshake. UNDETERMINED will listen for incoming
-       // forge handshake attempts. Also sends a reset handshake packet on every transition.
-       return ConnectionTypes.UNDETERMINED_17;
-     } else {
-       // Note for future implementation: Forge 1.13+ identifies itself using a slightly different
-       // hostname token.
-       return ConnectionTypes.VANILLA;
-     }
-   }
- 
-   /**
-    * Cleans the specified virtual host hostname.
-    *
-    * @param hostname the host name to clean
-    * @return the cleaned hostname
-    */
-   @VisibleForTesting
-   static String cleanVhost(String hostname) {
-     // Clean out any anything after any zero bytes (this includes BungeeCord forwarding and the
-     // legacy Forge handshake indicator).
-     String cleaned = hostname;
-     int zeroIdx = cleaned.indexOf('\0');
-     if (zeroIdx > -1) {
 diff --git a/proxy/src/main/java/com/velocitypowered/proxy/connection/client/InitialLoginSessionHandler.java b/proxy/src/main/java/com/velocitypowered/proxy/connection/client/InitialLoginSessionHandler.java
-index f6e1cd6e1dce527af8928a67b2eb17fae999e8b3..4b097d6fbe8370801adb695e817cc92ad6a857c9 100644
+index 6b63a6f8e2c8cb9d0b0931861fc1b74baea03ed6..4b097d6fbe8370801adb695e817cc92ad6a857c9 100644
 --- a/proxy/src/main/java/com/velocitypowered/proxy/connection/client/InitialLoginSessionHandler.java
 +++ b/proxy/src/main/java/com/velocitypowered/proxy/connection/client/InitialLoginSessionHandler.java
-@@ -1,318 +1,552 @@
- /*
-  * Copyright (C) 2018-2023 Velocity Contributors
-  *
-  * This program is free software: you can redistribute it and/or modify
-  * it under the terms of the GNU General Public License as published by
-  * the Free Software Foundation, either version 3 of the License, or
-  * (at your option) any later version.
-  *
-  * This program is distributed in the hope that it will be useful,
-  * but WITHOUT ANY WARRANTY; without even the implied warranty of
-  * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-  * GNU General Public License for more details.
-  *
-  * You should have received a copy of the GNU General Public License
-  * along with this program.  If not, see <https://www.gnu.org/licenses/>.
-  */
+@@ -17,22 +17,23 @@
  
  package com.velocitypowered.proxy.connection.client;
  
@@ -2188,7 +1144,7 @@ index f6e1cd6e1dce527af8928a67b2eb17fae999e8b3..4b097d6fbe8370801adb695e817cc92a
  import com.velocitypowered.proxy.crypto.IdentifiedKeyImpl;
  import com.velocitypowered.proxy.protocol.StateRegistry;
  import com.velocitypowered.proxy.protocol.netty.MinecraftDecoder;
- import com.velocitypowered.proxy.protocol.packet.EncryptionRequestPacket;
+@@ -40,42 +41,57 @@ import com.velocitypowered.proxy.protocol.packet.EncryptionRequestPacket;
  import com.velocitypowered.proxy.protocol.packet.EncryptionResponsePacket;
  import com.velocitypowered.proxy.protocol.packet.LoginPluginResponsePacket;
  import com.velocitypowered.proxy.protocol.packet.ServerLoginPacket;
@@ -2205,10 +1161,10 @@ index f6e1cd6e1dce527af8928a67b2eb17fae999e8b3..4b097d6fbe8370801adb695e817cc92a
  import java.security.GeneralSecurityException;
  import java.security.KeyPair;
 -import java.security.MessageDigest;
+-import java.security.SecureRandom;
  import java.util.Arrays;
 +import java.util.List;
  import java.util.Optional;
--import java.util.concurrent.ThreadLocalRandom;
 +import java.util.UUID;
 +import java.util.concurrent.CompletableFuture;
  import net.kyori.adventure.text.Component;
@@ -2240,6 +1196,7 @@ index f6e1cd6e1dce527af8928a67b2eb17fae999e8b3..4b097d6fbe8370801adb695e817cc92a
  public class InitialLoginSessionHandler implements MinecraftSessionHandler {
  
    private static final Logger logger = LogManager.getLogger(InitialLoginSessionHandler.class);
+-  private static final SecureRandom SECURE_RANDOM = new SecureRandom();
 -  private static final String MOJANG_HASJOINED_URL =
 -      System.getProperty("mojang.sessionserver",
 -              "https://sessionserver.mojang.com/session/minecraft/hasJoined")
@@ -2258,69 +1215,7 @@ index f6e1cd6e1dce527af8928a67b2eb17fae999e8b3..4b097d6fbe8370801adb695e817cc92a
    private LoginState currentState = LoginState.LOGIN_PACKET_EXPECTED;
    private final boolean forceKeyAuthentication;
  
-   InitialLoginSessionHandler(VelocityServer server, MinecraftConnection mcConnection,
-                              LoginInboundConnection inbound) {
-     this.server = Preconditions.checkNotNull(server, "server");
-     this.mcConnection = Preconditions.checkNotNull(mcConnection, "mcConnection");
-     this.inbound = Preconditions.checkNotNull(inbound, "inbound");
-     this.forceKeyAuthentication = VelocityProperties.readBoolean(
-             "auth.forceSecureProfiles", server.getConfiguration().isForceKeyAuthentication());
-   }
- 
-   @Override
-   public boolean handle(ServerLoginPacket packet) {
-     assertState(LoginState.LOGIN_PACKET_EXPECTED);
-     this.currentState = LoginState.LOGIN_PACKET_RECEIVED;
-     IdentifiedKey playerKey = packet.getPlayerKey();
-     if (playerKey != null) {
-       if (playerKey.hasExpired()) {
-         inbound.disconnect(
-             Component.translatable("multiplayer.disconnect.invalid_public_key_signature"));
-         return true;
-       }
- 
-       boolean isKeyValid;
-       if (playerKey.getKeyRevision() == IdentifiedKey.Revision.LINKED_V2
-           && playerKey instanceof final IdentifiedKeyImpl keyImpl) {
-         isKeyValid = keyImpl.internalAddHolder(packet.getHolderUuid());
-       } else {
-         isKeyValid = playerKey.isSignatureValid();
-       }
- 
-       if (!isKeyValid) {
-         inbound.disconnect(Component.translatable("multiplayer.disconnect.invalid_public_key"));
-         return true;
-       }
-     } else if (mcConnection.getProtocolVersion().noLessThan(ProtocolVersion.MINECRAFT_1_19)
-         && forceKeyAuthentication
-         && mcConnection.getProtocolVersion().lessThan(ProtocolVersion.MINECRAFT_1_19_3)) {
-       inbound.disconnect(Component.translatable("multiplayer.disconnect.missing_public_key"));
-       return true;
-     }
-     inbound.setPlayerKey(playerKey);
-     this.login = packet;
- 
-     final PreLoginEvent event = new PreLoginEvent(inbound, login.getUsername(), login.getHolderUuid());
-     server.getEventManager().fire(event).thenRunAsync(() -> {
-       if (mcConnection.isClosed()) {
-         // The player was disconnected
-         return;
-       }
- 
-       PreLoginComponentResult result = event.getResult();
-       Optional<Component> disconnectReason = result.getReasonComponent();
-       if (disconnectReason.isPresent()) {
-         // The component is guaranteed to be provided if the connection was denied.
-         inbound.disconnect(disconnectReason.get());
-         return;
-       }
- 
-       inbound.loginEventFired(() -> {
-         if (mcConnection.isClosed()) {
-           // The player was disconnected
-           return;
-         }
- 
+@@ -145,11 +161,8 @@ public class InitialLoginSessionHandler implements MinecraftSessionHandler {
          mcConnection.eventLoop().execute(() -> {
            if (!result.isForceOfflineMode()
                && (server.getConfiguration().isOnlineMode() || result.isOnlineModeAllowed())) {
@@ -2334,21 +1229,7 @@ index f6e1cd6e1dce527af8928a67b2eb17fae999e8b3..4b097d6fbe8370801adb695e817cc92a
            } else {
              mcConnection.setActiveSessionHandler(StateRegistry.LOGIN,
                  new AuthSessionHandler(server, inbound,
-                     GameProfile.forOfflinePlayer(login.getUsername()), false, null));
-           }
-         });
-       });
-     }, mcConnection.eventLoop()).exceptionally((ex) -> {
-       logger.error("Exception in pre-login stage", ex);
-       return null;
-     });
- 
-     return true;
-   }
- 
-   @Override
-   public boolean handle(LoginPluginResponsePacket packet) {
-     this.inbound.handleLoginPluginResponse(packet);
+@@ -171,114 +184,338 @@ public class InitialLoginSessionHandler implements MinecraftSessionHandler {
      return true;
    }
  
@@ -2427,7 +1308,7 @@ index f6e1cd6e1dce527af8928a67b2eb17fae999e8b3..4b097d6fbe8370801adb695e817cc92a
 +                  server, inbound, player.getGameProfile(), false, null,
 +                  new AuthSessionHandler.Transfer(player)));
 +          return true;
-+        }
+         }
 +        case MOD -> {
 +          // The backend event loop owns this copy until it installs its independent cipher.
 +          byte[] backendSecret = secret.clone();
@@ -2468,8 +1349,8 @@ index f6e1cd6e1dce527af8928a67b2eb17fae999e8b3..4b097d6fbe8370801adb695e817cc92a
 +            Arrays.fill(backendSecret, (byte) 0);
 +            disconnectRelay(ConnectionMessages.INTERNAL_SERVER_CONNECTION_ERROR);
 +          }
-         }
-       }
++        }
++      }
 +    } catch (GeneralSecurityException exception) {
 +      logger.error("Cannot decrypt the frontend key response or enable frontend encryption",
 +          exception);
@@ -2477,13 +1358,12 @@ index f6e1cd6e1dce527af8928a67b2eb17fae999e8b3..4b097d6fbe8370801adb695e817cc92a
 +    } finally {
 +      if (secret != null) {
 +        Arrays.fill(secret, (byte) 0);
-+      }
+       }
 +    }
 +    return true;
 +  }
  
 -      byte[] decryptedSharedSecret = decryptRsa(serverKeyPair, packet.getSharedSecret());
--      String serverId = generateServerId(decryptedSharedSecret, serverKeyPair.getPublic());
 +  /**
 +   * Opens the configured target before Velocity sends the frontend Server Hello.
 +   *
@@ -2503,9 +1383,9 @@ index f6e1cd6e1dce527af8928a67b2eb17fae999e8b3..4b097d6fbe8370801adb695e817cc92a
 +      return;
 +    }
  
--      String playerIp = ((InetSocketAddress) mcConnection.getRemoteAddress()).getHostString();
--      String url = String.format(MOJANG_HASJOINED_URL,
--          urlFormParameterEscaper().escape(login.getUsername()), serverId);
+-      // Go ahead and enable encryption. Once the client sends EncryptionResponse, encryption
+-      // is enabled.
+-      mcConnection.enableEncryption(decryptedSharedSecret);
 +    UUID holderUuid = login.getHolderUuid();
 +    GameProfile provisionalProfile = holderUuid == null
 +        ? GameProfile.forOfflinePlayer(login.getUsername())
@@ -2530,9 +1410,10 @@ index f6e1cd6e1dce527af8928a67b2eb17fae999e8b3..4b097d6fbe8370801adb695e817cc92a
 +      return;
 +    }
  
--      if (server.getConfiguration().shouldPreventClientProxyConnections()) {
--        url += "&ip=" + urlFormParameterEscaper().escape(playerIp);
--      }
+-      String serverId = generateServerId(decryptedSharedSecret, serverKeyPair.getPublic());
+-      String playerIp = ((InetSocketAddress) mcConnection.getRemoteAddress()).getHostString();
+-      String url = String.format(MOJANG_HASJOINED_URL,
+-          urlFormParameterEscaper().escape(login.getUsername()), serverId);
 +    RegisteredServer configuredTarget = target.get();
 +    if (!(configuredTarget instanceof VelocityRegisteredServer velocityTarget)) {
 +      logger.error(
@@ -2541,6 +1422,21 @@ index f6e1cd6e1dce527af8928a67b2eb17fae999e8b3..4b097d6fbe8370801adb695e817cc92a
 +      disconnectRelay(ConnectionMessages.INTERNAL_SERVER_CONNECTION_ERROR);
 +      return;
 +    }
+ 
+-      if (server.getConfiguration().shouldPreventClientProxyConnections()) {
+-        url += "&ip=" + urlFormParameterEscaper().escape(playerIp);
+-      }
++    CompletableFuture<Impl> connectionResult =
++        player.connectToInitialServerForRelay(velocityTarget);
++    this.relayBackend = player.getConnectionInFlight();
++    if (this.relayBackend == null) {
++      logger.error(
++          "Cannot start initial relay for {}: connection request retained no backend", player);
++      disconnectRelay(ConnectionMessages.INTERNAL_SERVER_CONNECTION_ERROR);
++      return;
++    }
++    connectionResult.whenCompleteAsync(this::handleInitialBackendResult, mcConnection.eventLoop());
++  }
  
 -      final HttpRequest httpRequest = HttpRequest.newBuilder()
 -              .setHeader("User-Agent",
@@ -2559,18 +1455,6 @@ index f6e1cd6e1dce527af8928a67b2eb17fae999e8b3..4b097d6fbe8370801adb695e817cc92a
 -            if (throwable != null) {
 -              logger.error("Unable to authenticate player", throwable);
 -              inbound.disconnect(Component.translatable("multiplayer.disconnect.authservers_down"));
--              return;
--            }
--
--            // Go ahead and enable encryption. Once the client sends EncryptionResponse, encryption
--            // is enabled.
--            try {
--              mcConnection.enableEncryption(decryptedSharedSecret);
--            } catch (GeneralSecurityException e) {
--              logger.error("Unable to enable encryption for connection", e);
--              // At this point, the connection is encrypted, but something's wrong on our side and
--              // we can't do anything about it.
--              mcConnection.close(true);
 -              return;
 -            }
 -
@@ -2607,22 +1491,6 @@ index f6e1cd6e1dce527af8928a67b2eb17fae999e8b3..4b097d6fbe8370801adb695e817cc92a
 -    } catch (GeneralSecurityException e) {
 -      logger.error("Unable to enable encryption", e);
 -      mcConnection.close(true);
-+    CompletableFuture<Impl> connectionResult =
-+        player.connectToInitialServerForRelay(velocityTarget);
-+    this.relayBackend = player.getConnectionInFlight();
-+    if (this.relayBackend == null) {
-+      logger.error(
-+          "Cannot start initial relay for {}: connection request retained no backend", player);
-+      disconnectRelay(ConnectionMessages.INTERNAL_SERVER_CONNECTION_ERROR);
-+      return;
-     }
--    return true;
-+    connectionResult.whenCompleteAsync(this::handleInitialBackendResult, mcConnection.eventLoop());
-   }
- 
--  private EncryptionRequestPacket generateEncryptionRequest() {
--    byte[] verify = new byte[4];
--    ThreadLocalRandom.current().nextBytes(verify);
 +  /**
 +   * Converts a failed target connection into one frontend login failure.
 +   *
@@ -2647,9 +1515,13 @@ index f6e1cd6e1dce527af8928a67b2eb17fae999e8b3..4b097d6fbe8370801adb695e817cc92a
 +    } else if (result == null && !mcConnection.isClosed()) {
 +      logger.error("Initial FakePlayerProxy backend connection completed without a result");
 +      disconnectRelay(ConnectionMessages.INTERNAL_SERVER_CONNECTION_ERROR);
-+    }
-+  }
-+
+     }
+-    return true;
+   }
+ 
+-  private EncryptionRequestPacket generateEncryptionRequest() {
+-    byte[] verify = new byte[4];
+-    SECURE_RANDOM.nextBytes(verify);
 +  /**
 +   * Sends the target Server Hello through the existing frontend login packet.
 +   *
@@ -2784,9 +1656,7 @@ index f6e1cd6e1dce527af8928a67b2eb17fae999e8b3..4b097d6fbe8370801adb695e817cc92a
    }
  
    @Override
-   public void handleUnknown(ByteBuf buf) {
-     mcConnection.close(true);
-   }
+@@ -288,6 +525,10 @@ public class InitialLoginSessionHandler implements MinecraftSessionHandler {
  
    @Override
    public void disconnected() {
@@ -2797,30 +1667,12 @@ index f6e1cd6e1dce527af8928a67b2eb17fae999e8b3..4b097d6fbe8370801adb695e817cc92a
      this.inbound.cleanup();
    }
  
-   private void assertState(LoginState expectedState) {
-     if (this.currentState != expectedState) {
-       if (MinecraftDecoder.DEBUG) {
-         logger.error("{} Received an unexpected packet requiring state {}, but we are in {}",
-             inbound,
-             expectedState, this.currentState);
-       }
-       mcConnection.close(true);
-     }
-   }
- 
-   private enum LoginState {
-     LOGIN_PACKET_EXPECTED,
-     LOGIN_PACKET_RECEIVED,
-     ENCRYPTION_REQUEST_SENT,
-     ENCRYPTION_RESPONSE_RECEIVED
-   }
- }
 diff --git a/proxy/src/main/java/com/velocitypowered/proxy/connection/client/RawTunnelForwardHandler.java b/proxy/src/main/java/com/velocitypowered/proxy/connection/client/RawTunnelForwardHandler.java
 new file mode 100644
-index 0000000000000000000000000000000000000000..2c3563e3d4bffabbb9f2e97029039d7611a86ff5
+index 0000000000000000000000000000000000000000..87c0eebbe7906099649824d0611a2850baffcc95
 --- /dev/null
 +++ b/proxy/src/main/java/com/velocitypowered/proxy/connection/client/RawTunnelForwardHandler.java
-@@ -0,0 +1,145 @@
+@@ -0,0 +1,144 @@
 +/*
 + * Copyright (C) 2018-2023 Velocity Contributors
 + *
@@ -2840,7 +1692,6 @@ index 0000000000000000000000000000000000000000..2c3563e3d4bffabbb9f2e97029039d76
 +
 +package com.velocitypowered.proxy.connection.client;
 +
-+import com.google.common.base.Preconditions;
 +import io.netty.buffer.ByteBuf;
 +import io.netty.channel.Channel;
 +import io.netty.channel.ChannelHandlerContext;
@@ -2868,7 +1719,7 @@ index 0000000000000000000000000000000000000000..2c3563e3d4bffabbb9f2e97029039d76
 +  private final Channel peer;
 +
 +  RawTunnelForwardHandler(Channel peer) {
-+    this.peer = Preconditions.checkNotNull(peer, "peer");
++    this.peer = peer;
 +  }
 +
 +  @Override
@@ -2968,10 +1819,10 @@ index 0000000000000000000000000000000000000000..2c3563e3d4bffabbb9f2e97029039d76
 +}
 diff --git a/proxy/src/main/java/com/velocitypowered/proxy/connection/client/TransferTunnelLoginSessionHandler.java b/proxy/src/main/java/com/velocitypowered/proxy/connection/client/TransferTunnelLoginSessionHandler.java
 new file mode 100644
-index 0000000000000000000000000000000000000000..6a1920985e7ded0effb79766c0742d625ffd4b4e
+index 0000000000000000000000000000000000000000..f67c3f6ebefa5354ce2246236284dd9810b7e778
 --- /dev/null
 +++ b/proxy/src/main/java/com/velocitypowered/proxy/connection/client/TransferTunnelLoginSessionHandler.java
-@@ -0,0 +1,467 @@
+@@ -0,0 +1,472 @@
 +/*
 + * Copyright (C) 2018-2023 Velocity Contributors
 + *
@@ -3000,7 +1851,6 @@ index 0000000000000000000000000000000000000000..6a1920985e7ded0effb79766c0742d62
 +import static com.velocitypowered.proxy.network.Connections.MINECRAFT_DECODER;
 +import static com.velocitypowered.proxy.network.Connections.MINECRAFT_ENCODER;
 +
-+import com.google.common.base.Preconditions;
 +import com.velocitypowered.api.network.HandshakeIntent;
 +import com.velocitypowered.proxy.connection.MinecraftConnection;
 +import com.velocitypowered.proxy.connection.MinecraftSessionHandler;
@@ -3049,11 +1899,11 @@ index 0000000000000000000000000000000000000000..6a1920985e7ded0effb79766c0742d62
 +      HandshakePacket transferHandshake,
 +      InetSocketAddress targetAddress,
 +      TargetConnector targetConnector) {
-+    this.frontend = Preconditions.checkNotNull(frontend, "frontend");
-+    this.inbound = Preconditions.checkNotNull(inbound, "inbound");
-+    this.transferHandshake = Preconditions.checkNotNull(transferHandshake, "transferHandshake");
-+    this.targetAddress = Preconditions.checkNotNull(targetAddress, "targetAddress");
-+    this.targetConnector = Preconditions.checkNotNull(targetConnector, "targetConnector");
++    this.frontend = frontend;
++    this.inbound = inbound;
++    this.transferHandshake = transferHandshake;
++    this.targetAddress = targetAddress;
++    this.targetConnector = targetConnector;
 +  }
 +
 +  /**
@@ -3145,7 +1995,13 @@ index 0000000000000000000000000000000000000000..6a1920985e7ded0effb79766c0742d62
 +   * @param loginPacket the Login Start packet from the client
 +   */
 +  private void writeTargetBootstrap(ServerLoginPacket loginPacket) {
-+    Channel targetChannel = Preconditions.checkNotNull(target, "target");
++    Channel targetChannel = target;
++    if (targetChannel == null) {
++      logger.error("Cannot write raw target bootstrap to {}: target channel is absent",
++          targetAddress);
++      closeBeforeHandoff();
++      return;
++    }
 +    HandshakePacket targetHandshake = new HandshakePacket();
 +    targetHandshake.setProtocolVersion(transferHandshake.getProtocolVersion());
 +    targetHandshake.setServerAddress(transferHandshake.getServerAddress());
@@ -3443,68 +2299,7 @@ diff --git a/proxy/src/main/java/com/velocitypowered/proxy/protocol/packet/Encry
 index 422d5e117c30d8690cef4ed9c82e4bc153bc5737..51f59248b97ce7ced294b79bea43541960b6f7d7 100644
 --- a/proxy/src/main/java/com/velocitypowered/proxy/protocol/packet/EncryptionRequestPacket.java
 +++ b/proxy/src/main/java/com/velocitypowered/proxy/protocol/packet/EncryptionRequestPacket.java
-@@ -1,96 +1,99 @@
- /*
-  * Copyright (C) 2018-2021 Velocity Contributors
-  *
-  * This program is free software: you can redistribute it and/or modify
-  * it under the terms of the GNU General Public License as published by
-  * the Free Software Foundation, either version 3 of the License, or
-  * (at your option) any later version.
-  *
-  * This program is distributed in the hope that it will be useful,
-  * but WITHOUT ANY WARRANTY; without even the implied warranty of
-  * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-  * GNU General Public License for more details.
-  *
-  * You should have received a copy of the GNU General Public License
-  * along with this program.  If not, see <https://www.gnu.org/licenses/>.
-  */
- 
- package com.velocitypowered.proxy.protocol.packet;
- 
- import static com.velocitypowered.proxy.connection.VelocityConstants.EMPTY_BYTE_ARRAY;
- 
- import com.velocitypowered.api.network.ProtocolVersion;
- import com.velocitypowered.proxy.connection.MinecraftSessionHandler;
- import com.velocitypowered.proxy.protocol.MinecraftPacket;
- import com.velocitypowered.proxy.protocol.ProtocolUtils;
- import io.netty.buffer.ByteBuf;
- import java.util.Arrays;
- 
- public class EncryptionRequestPacket implements MinecraftPacket {
- 
-   private String serverId = "";
-   private byte[] publicKey = EMPTY_BYTE_ARRAY;
-   private byte[] verifyToken = EMPTY_BYTE_ARRAY;
-   private boolean shouldAuthenticate = true;
- 
-   public byte[] getPublicKey() {
-     return publicKey.clone();
-   }
- 
-   public void setPublicKey(byte[] publicKey) {
-     this.publicKey = publicKey.clone();
-   }
- 
-   public byte[] getVerifyToken() {
-     return verifyToken.clone();
-   }
- 
-   public void setVerifyToken(byte[] verifyToken) {
-     this.verifyToken = verifyToken.clone();
-   }
- 
-   @Override
-   public String toString() {
-     return "EncryptionRequest{"
-         + "publicKey=" + Arrays.toString(publicKey)
-         + ", verifyToken=" + Arrays.toString(verifyToken)
-         + '}';
-   }
- 
-   @Override
-   public void decode(ByteBuf buf, ProtocolUtils.Direction direction, ProtocolVersion version) {
+@@ -62,7 +62,10 @@ public class EncryptionRequestPacket implements MinecraftPacket {
      this.serverId = ProtocolUtils.readString(buf, 20);
  
      if (version.noLessThan(ProtocolVersion.MINECRAFT_1_8)) {
@@ -3516,77 +2311,11 @@ index 422d5e117c30d8690cef4ed9c82e4bc153bc5737..51f59248b97ce7ced294b79bea435419
        verifyToken = ProtocolUtils.readByteArray(buf, 16);
        if (version.noLessThan(ProtocolVersion.MINECRAFT_1_20_5)) {
          shouldAuthenticate = buf.readBoolean();
-       }
-     } else {
-       publicKey = ProtocolUtils.readByteArray17(buf);
-       verifyToken = ProtocolUtils.readByteArray17(buf);
-     }
-   }
- 
-   @Override
-   public void encode(ByteBuf buf, ProtocolUtils.Direction direction, ProtocolVersion version) {
-     ProtocolUtils.writeString(buf, this.serverId);
- 
-     if (version.noLessThan(ProtocolVersion.MINECRAFT_1_8)) {
-       ProtocolUtils.writeByteArray(buf, publicKey);
-       ProtocolUtils.writeByteArray(buf, verifyToken);
-       if (version.noLessThan(ProtocolVersion.MINECRAFT_1_20_5)) {
-         buf.writeBoolean(shouldAuthenticate);
-       }
-     } else {
-       ProtocolUtils.writeByteArray17(publicKey, buf, false);
-       ProtocolUtils.writeByteArray17(verifyToken, buf, false);
-     }
-   }
- 
-   @Override
-   public boolean handle(MinecraftSessionHandler handler) {
-     return handler.handle(this);
-   }
- }
 diff --git a/proxy/src/main/java/com/velocitypowered/proxy/protocol/packet/EncryptionResponsePacket.java b/proxy/src/main/java/com/velocitypowered/proxy/protocol/packet/EncryptionResponsePacket.java
 index fedb67a5e3701451c32d0ae884c3c2b5badf6224..9b14499a9eace6105eafeecee05acb87d5389ea2 100644
 --- a/proxy/src/main/java/com/velocitypowered/proxy/protocol/packet/EncryptionResponsePacket.java
 +++ b/proxy/src/main/java/com/velocitypowered/proxy/protocol/packet/EncryptionResponsePacket.java
-@@ -1,121 +1,139 @@
- /*
-  * Copyright (C) 2018-2023 Velocity Contributors
-  *
-  * This program is free software: you can redistribute it and/or modify
-  * it under the terms of the GNU General Public License as published by
-  * the Free Software Foundation, either version 3 of the License, or
-  * (at your option) any later version.
-  *
-  * This program is distributed in the hope that it will be useful,
-  * but WITHOUT ANY WARRANTY; without even the implied warranty of
-  * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-  * GNU General Public License for more details.
-  *
-  * You should have received a copy of the GNU General Public License
-  * along with this program.  If not, see <https://www.gnu.org/licenses/>.
-  */
- 
- package com.velocitypowered.proxy.protocol.packet;
- 
- import static com.velocitypowered.proxy.connection.VelocityConstants.EMPTY_BYTE_ARRAY;
- 
- import com.velocitypowered.api.network.ProtocolVersion;
- import com.velocitypowered.proxy.connection.MinecraftSessionHandler;
- import com.velocitypowered.proxy.protocol.MinecraftPacket;
- import com.velocitypowered.proxy.protocol.ProtocolUtils;
- import com.velocitypowered.proxy.protocol.ProtocolUtils.Direction;
- import com.velocitypowered.proxy.util.except.QuietDecoderException;
- import io.netty.buffer.ByteBuf;
- import org.checkerframework.checker.nullness.qual.Nullable;
- 
- import java.util.Arrays;
- 
- public class EncryptionResponsePacket implements MinecraftPacket {
- 
-   private static final QuietDecoderException NO_SALT = new QuietDecoderException(
-       "Encryption response didn't contain salt");
- 
-   private byte[] sharedSecret = EMPTY_BYTE_ARRAY;
+@@ -39,6 +39,24 @@ public class EncryptionResponsePacket implements MinecraftPacket {
    private byte[] verifyToken = EMPTY_BYTE_ARRAY;
    private @Nullable Long salt;
  
@@ -3611,160 +2340,11 @@ index fedb67a5e3701451c32d0ae884c3c2b5badf6224..9b14499a9eace6105eafeecee05acb87
    public byte[] getSharedSecret() {
      return sharedSecret.clone();
    }
- 
-   public byte[] getVerifyToken() {
-     return verifyToken.clone();
-   }
- 
-   public long getSalt() {
-     if (salt == null) {
-       throw NO_SALT;
-     }
-     return salt;
-   }
- 
-   @Override
-   public String toString() {
-     return "EncryptionResponse{"
-         + "sharedSecret=" + Arrays.toString(sharedSecret)
-         + ", verifyToken=" + Arrays.toString(verifyToken)
-         + '}';
-   }
- 
-   @Override
-   public void decode(ByteBuf buf, ProtocolUtils.Direction direction, ProtocolVersion version) {
-     if (version.noLessThan(ProtocolVersion.MINECRAFT_1_8)) {
-       this.sharedSecret = ProtocolUtils.readByteArray(buf, 128);
- 
-       if (version.noLessThan(ProtocolVersion.MINECRAFT_1_19)
-           && version.lessThan(ProtocolVersion.MINECRAFT_1_19_3)
-           && !buf.readBoolean()) {
-         salt = buf.readLong();
-       }
- 
-       this.verifyToken = ProtocolUtils.readByteArray(buf,
-           version.noLessThan(ProtocolVersion.MINECRAFT_1_19) ? 256 : 128);
-     } else {
-       this.sharedSecret = ProtocolUtils.readByteArray17(buf);
-       this.verifyToken = ProtocolUtils.readByteArray17(buf);
-     }
-   }
- 
-   @Override
-   public void encode(ByteBuf buf, ProtocolUtils.Direction direction, ProtocolVersion version) {
-     if (version.noLessThan(ProtocolVersion.MINECRAFT_1_8)) {
-       ProtocolUtils.writeByteArray(buf, sharedSecret);
-       if (version.noLessThan(ProtocolVersion.MINECRAFT_1_19)
-           && version.lessThan(ProtocolVersion.MINECRAFT_1_19_3)) {
-         if (salt != null) {
-           buf.writeBoolean(false);
-           buf.writeLong(salt);
-         } else {
-           buf.writeBoolean(true);
-         }
-       }
-       ProtocolUtils.writeByteArray(buf, verifyToken);
-     } else {
-       ProtocolUtils.writeByteArray17(sharedSecret, buf, false);
-       ProtocolUtils.writeByteArray17(verifyToken, buf, false);
-     }
-   }
- 
-   @Override
-   public boolean handle(MinecraftSessionHandler handler) {
-     return handler.handle(this);
-   }
- 
-   @Override
-   public int decodeExpectedMaxLength(ByteBuf buf, Direction direction, ProtocolVersion version) {
-     // It turns out these come out to the same length, whether we're talking >=1.8 or not.
-     // The length prefix always winds up being 2 bytes.
-     int base = 256 + 2 + 2;
-     if (version.noLessThan(ProtocolVersion.MINECRAFT_1_19_3)) {
-       return base + 128;
-     }
-     if (version.noLessThan(ProtocolVersion.MINECRAFT_1_19)) {
-       // Verify token is twice as long on 1.19+
-       // Additional 1 byte for left <> right and 8 bytes for salt
-       base += 128 + 8 + 1;
-     }
 diff --git a/proxy/src/main/java/com/velocitypowered/proxy/protocol/packet/ServerLoginSuccessPacket.java b/proxy/src/main/java/com/velocitypowered/proxy/protocol/packet/ServerLoginSuccessPacket.java
 index 4b8e722a5b44bbae39c8b5f41e79c5d68628e02c..2d0eae5192b2474b4b1567f6319c98e9edf858d7 100644
 --- a/proxy/src/main/java/com/velocitypowered/proxy/protocol/packet/ServerLoginSuccessPacket.java
 +++ b/proxy/src/main/java/com/velocitypowered/proxy/protocol/packet/ServerLoginSuccessPacket.java
-@@ -1,155 +1,167 @@
- /*
-  * Copyright (C) 2018-2022 Velocity Contributors
-  *
-  * This program is free software: you can redistribute it and/or modify
-  * it under the terms of the GNU General Public License as published by
-  * the Free Software Foundation, either version 3 of the License, or
-  * (at your option) any later version.
-  *
-  * This program is distributed in the hope that it will be useful,
-  * but WITHOUT ANY WARRANTY; without even the implied warranty of
-  * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-  * GNU General Public License for more details.
-  *
-  * You should have received a copy of the GNU General Public License
-  * along with this program.  If not, see <https://www.gnu.org/licenses/>.
-  */
- 
- package com.velocitypowered.proxy.protocol.packet;
- 
- import com.velocitypowered.api.network.ProtocolVersion;
- import com.velocitypowered.api.util.GameProfile;
- import com.velocitypowered.api.util.UuidUtils;
- import com.velocitypowered.proxy.connection.MinecraftSessionHandler;
- import com.velocitypowered.proxy.protocol.MinecraftPacket;
- import com.velocitypowered.proxy.protocol.ProtocolUtils;
- import com.velocitypowered.proxy.protocol.ProtocolUtils.Direction;
- import com.velocitypowered.proxy.util.VelocityProperties;
- import io.netty.buffer.ByteBuf;
- import java.util.List;
- import java.util.UUID;
- import org.checkerframework.checker.nullness.qual.Nullable;
- 
- public class ServerLoginSuccessPacket implements MinecraftPacket {
- 
-   private @Nullable UUID uuid;
-   private @Nullable String username;
-   private @Nullable List<GameProfile.Property> properties;
-   private @Nullable UUID sessionId;
-   private static final boolean strictErrorHandling = VelocityProperties
-           .readBoolean("velocity.strictErrorHandling", true);
- 
-   public UUID getUuid() {
-     if (uuid == null) {
-       throw new IllegalStateException("No UUID specified!");
-     }
-     return uuid;
-   }
- 
-   public void setUuid(UUID uuid) {
-     this.uuid = uuid;
-   }
- 
-   public String getUsername() {
-     if (username == null) {
-       throw new IllegalStateException("No username specified!");
-     }
-     return username;
-   }
- 
-   public void setUsername(String username) {
-     this.username = username;
-   }
- 
-   public List<GameProfile.Property> getProperties() {
-     return properties;
-   }
- 
-   public void setProperties(List<GameProfile.Property> properties) {
-     this.properties = properties;
-   }
- 
-   public void setSessionId(@Nullable UUID sessionId) {
+@@ -73,6 +73,18 @@ public class ServerLoginSuccessPacket implements MinecraftPacket {
      this.sessionId = sessionId;
    }
  
@@ -3783,83 +2363,6 @@ index 4b8e722a5b44bbae39c8b5f41e79c5d68628e02c..2d0eae5192b2474b4b1567f6319c98e9
    @Override
    public String toString() {
      return "ServerLoginSuccess{"
-         + "uuid=" + uuid
-         + ", username='" + username + '\''
-         + ", properties='" + properties + '\''
-         + '}';
-   }
- 
-   @Override
-   public void decode(ByteBuf buf, ProtocolUtils.Direction direction, ProtocolVersion version) {
-     if (version.noLessThan(ProtocolVersion.MINECRAFT_1_19)) {
-       uuid = ProtocolUtils.readUuid(buf);
-     } else if (version.noLessThan(ProtocolVersion.MINECRAFT_1_16)) {
-       uuid = ProtocolUtils.readUuidIntArray(buf);
-     } else if (version.noLessThan(ProtocolVersion.MINECRAFT_1_7_6)) {
-       uuid = UUID.fromString(ProtocolUtils.readString(buf, 36));
-     } else {
-       uuid = UuidUtils.fromUndashed(ProtocolUtils.readString(buf, 32));
-     }
-     username = ProtocolUtils.readString(buf, 16);
- 
-     if (version.noLessThan(ProtocolVersion.MINECRAFT_1_19)) {
-       properties = ProtocolUtils.readProperties(buf);
-     }
-     if (version == ProtocolVersion.MINECRAFT_1_20_5 || version == ProtocolVersion.MINECRAFT_1_21) {
-       buf.readBoolean();
-     }
- 
-     if (version.noLessThan(ProtocolVersion.MINECRAFT_26_2)) {
-       this.sessionId = ProtocolUtils.readUuid(buf);
-     }
-   }
- 
-   @Override
-   public void encode(ByteBuf buf, ProtocolUtils.Direction direction, ProtocolVersion version) {
-     if (uuid == null) {
-       throw new IllegalStateException("No UUID specified!");
-     }
-     if (version.noLessThan(ProtocolVersion.MINECRAFT_1_19)) {
-       ProtocolUtils.writeUuid(buf, uuid);
-     } else if (version.noLessThan(ProtocolVersion.MINECRAFT_1_16)) {
-       ProtocolUtils.writeUuidIntArray(buf, uuid);
-     } else if (version.noLessThan(ProtocolVersion.MINECRAFT_1_7_6)) {
-       ProtocolUtils.writeString(buf, uuid.toString());
-     } else {
-       ProtocolUtils.writeString(buf, UuidUtils.toUndashed(uuid));
-     }
-     if (username == null) {
-       throw new IllegalStateException("No username specified!");
-     }
-     ProtocolUtils.writeString(buf, username);
- 
-     if (version.noLessThan(ProtocolVersion.MINECRAFT_1_19)) {
-       if (properties == null) {
-         ProtocolUtils.writeVarInt(buf, 0);
-       } else {
-         ProtocolUtils.writeProperties(buf, properties);
-       }
-     }
-     if (version == ProtocolVersion.MINECRAFT_1_20_5 || version == ProtocolVersion.MINECRAFT_1_21) {
-       buf.writeBoolean(strictErrorHandling);
-     }
- 
-     if (version.noLessThan(ProtocolVersion.MINECRAFT_26_2)) {
-       ProtocolUtils.writeUuid(buf, this.sessionId);
-     }
-   }
- 
-   @Override
-   public boolean handle(MinecraftSessionHandler handler) {
-     return handler.handle(this);
-   }
- 
-   @Override
-   public int encodeSizeHint(Direction direction, ProtocolVersion version) {
-     // We could compute an exact size, but 4KiB ought to be enough to encode all reasonable
-     // sizes of this packet.
-     return 4 * 1024;
-   }
 diff --git a/proxy/src/main/java/com/velocitypowered/proxy/protocol/util/FakePlayerProxyRelay.java b/proxy/src/main/java/com/velocitypowered/proxy/protocol/util/FakePlayerProxyRelay.java
 new file mode 100644
 index 0000000000000000000000000000000000000000..ac1c5853db2e50cfc73c7603cd0ffe7f611cf795

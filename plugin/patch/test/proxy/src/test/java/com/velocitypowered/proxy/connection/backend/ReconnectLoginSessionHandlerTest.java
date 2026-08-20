@@ -1,11 +1,13 @@
 package com.velocitypowered.proxy.connection.backend;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertInstanceOf;
+import static org.junit.jupiter.api.Assertions.assertNull;
+import static org.junit.jupiter.api.Assertions.assertNotSame;
 import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.doAnswer;
-import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.inOrder;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.timeout;
@@ -21,6 +23,7 @@ import com.velocitypowered.proxy.connection.util.ConnectionRequestResults.Impl;
 import com.velocitypowered.proxy.crypto.EncryptionUtils;
 import com.velocitypowered.proxy.protocol.packet.EncryptionRequestPacket;
 import com.velocitypowered.proxy.protocol.packet.EncryptionResponsePacket;
+import com.velocitypowered.proxy.server.VelocityRegisteredServer;
 import io.netty.channel.ChannelFuture;
 import io.netty.channel.EventLoop;
 import java.nio.charset.StandardCharsets;
@@ -74,6 +77,29 @@ final class ReconnectLoginSessionHandlerTest {
         new AuthenticationUnavailableException(), AuthenticationUnavailableException.class);
   }
 
+  @Test
+  void replacementOwnsItsTokenAndStartsWithoutClientLoadedState() {
+    VelocityRegisteredServer target = mock(VelocityRegisteredServer.class);
+    ConnectedPlayer player = mock(ConnectedPlayer.class);
+    VelocityServer server = mock(VelocityServer.class);
+    byte[] source = new byte[]{1, 2, 3};
+    VelocityServerConnection replacement = new VelocityServerConnection(
+        target, target, player, server, source);
+
+    source[0] = 9;
+    byte[] owned = replacement.takeReconnectToken();
+
+    assertFalse(replacement.isClientLoaded());
+    assertNotSame(source, owned);
+    assertEquals(java.util.List.of((byte) 1, (byte) 2, (byte) 3), bytes(owned));
+    assertNull(replacement.takeReconnectToken());
+
+    VelocityServerConnection cancelled = new VelocityServerConnection(
+        target, target, player, server, new byte[]{4, 5, 6});
+    cancelled.disconnect();
+    assertNull(cancelled.takeReconnectToken());
+  }
+
   private static void assertSameFailure(
       Exception expected, Class<? extends Exception> expectedType) throws Exception {
     Context context = context(expected);
@@ -107,6 +133,7 @@ final class ReconnectLoginSessionHandlerTest {
         .thenReturn(authorization.getBytes(StandardCharsets.UTF_8));
     when(serverConnection.getPlayer()).thenReturn(player);
     when(serverConnection.ensureConnected()).thenReturn(backend);
+    when(serverConnection.getConnection()).thenReturn(backend);
     when(player.getUniqueId()).thenReturn(profileId);
     when(backend.eventLoop()).thenReturn(eventLoop);
     when(backend.getActiveSessionHandler()).thenReturn(handler);
@@ -125,9 +152,10 @@ final class ReconnectLoginSessionHandlerTest {
       typed.operationComplete(write);
       return write;
     }).when(write).addListener(any());
-    if (joinFailure != null) {
-      doThrow(joinFailure).when(server).joinBackendSession(any(), any(), any());
-    }
+    CompletableFuture<Void> join = joinFailure == null
+        ? CompletableFuture.completedFuture(null)
+        : CompletableFuture.failedFuture(joinFailure);
+    when(server.joinBackendSession(any(), any(), any())).thenReturn(join);
     return new Context(
         handler, request, result, server, serverConnection, backend,
         profileId, authorization, keys);

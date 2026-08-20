@@ -30,6 +30,10 @@ import static org.junit.jupiter.api.Assertions.assertInstanceOf;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.doAnswer;
+import static org.mockito.Mockito.times;
+import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 import com.velocitypowered.api.network.HandshakeIntent;
@@ -40,6 +44,7 @@ import com.velocitypowered.proxy.VelocityServer;
 import com.velocitypowered.proxy.config.VelocityConfiguration;
 import com.velocitypowered.proxy.connection.MinecraftConnection;
 import com.velocitypowered.proxy.connection.backend.VelocityServerConnection;
+import com.velocitypowered.proxy.connection.backend.LoginSessionHandler;
 import com.velocitypowered.proxy.protocol.MinecraftPacket;
 import com.velocitypowered.proxy.protocol.ProtocolUtils;
 import com.velocitypowered.proxy.protocol.StateRegistry;
@@ -51,11 +56,15 @@ import com.velocitypowered.proxy.protocol.netty.MinecraftVarintLengthEncoder;
 import com.velocitypowered.proxy.protocol.packet.DisconnectPacket;
 import com.velocitypowered.proxy.protocol.packet.EncryptionRequestPacket;
 import com.velocitypowered.proxy.protocol.packet.HandshakePacket;
+import com.velocitypowered.proxy.protocol.packet.PluginMessagePacket;
 import com.velocitypowered.proxy.protocol.packet.ServerLoginPacket;
+import com.velocitypowered.proxy.protocol.packet.ClientSettingsPacket;
+import com.velocitypowered.proxy.util.VelocityChannelRegistrar;
 import io.netty.buffer.ByteBuf;
 import io.netty.buffer.ByteBufUtil;
 import io.netty.buffer.Unpooled;
 import io.netty.channel.DefaultChannelPromise;
+import io.netty.channel.EventLoop;
 import io.netty.channel.embedded.EmbeddedChannel;
 import io.netty.util.ReferenceCountUtil;
 import java.net.ConnectException;
@@ -64,6 +73,7 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
+import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
 import net.kyori.adventure.text.Component;
@@ -121,6 +131,80 @@ class FakePlayerProxyTransferTunnelTest {
     ReferenceCountUtil.release(frame);
     frontendChannel.finishAndReleaseAll();
     backendChannel.finishAndReleaseAll();
+  }
+
+  @Test
+  void clientConfigForwardsAnUnregisteredPluginMessageWithoutCopyingItsContent() {
+    VelocityServer server = mock(VelocityServer.class);
+    ConnectedPlayer player = mock(ConnectedPlayer.class);
+    VelocityServerConnection serverConnection = mock(VelocityServerConnection.class);
+    MinecraftConnection backend = mock(MinecraftConnection.class);
+    VelocityChannelRegistrar channels = mock(VelocityChannelRegistrar.class);
+    PluginMessagePacket packet = mock(PluginMessagePacket.class);
+    when(player.getConnectionInFlight()).thenReturn(serverConnection);
+    when(serverConnection.ensureConnected()).thenReturn(backend);
+    when(server.getChannelRegistrar()).thenReturn(channels);
+    when(packet.getChannel()).thenReturn("example:unregistered");
+    when(channels.getFromId("example:unregistered")).thenReturn(null);
+    when(packet.retain()).thenReturn(packet);
+    ClientConfigSessionHandler handler = new ClientConfigSessionHandler(server, player);
+
+    handler.handle(packet);
+
+    verify(backend).write(packet);
+    verify(packet, never()).content();
+  }
+
+  @Test
+  void relayConfigurationWaitsForBothPrerequisitesAndResumesOnlyOnce() {
+    assertRelayBarrier(true);
+    assertRelayBarrier(false);
+  }
+
+  private static void assertRelayBarrier(boolean postLoginFirst) {
+    VelocityServer server = mock(VelocityServer.class);
+    ConnectedPlayer player = mock(ConnectedPlayer.class);
+    MinecraftConnection frontend = mock(MinecraftConnection.class);
+    EventLoop frontendLoop = mock(EventLoop.class);
+    VelocityServerConnection relay = mock(VelocityServerConnection.class);
+    MinecraftConnection backend = mock(MinecraftConnection.class);
+    EventLoop backendLoop = mock(EventLoop.class);
+    LoginSessionHandler login = mock(LoginSessionHandler.class);
+    CompletableFuture<Void> postLogin = new CompletableFuture<>();
+    ClientSettingsPacket first = mock(ClientSettingsPacket.class);
+    ClientSettingsPacket duplicate = mock(ClientSettingsPacket.class);
+    when(player.getConnection()).thenReturn(frontend);
+    when(frontend.eventLoop()).thenReturn(frontendLoop);
+    when(relay.getConnection()).thenReturn(backend);
+    when(backend.eventLoop()).thenReturn(backendLoop);
+    when(backend.getActiveSessionHandler()).thenReturn(login);
+    doAnswer(invocation -> {
+      ((Runnable) invocation.getArgument(0)).run();
+      return null;
+    }).when(frontendLoop).execute(org.mockito.ArgumentMatchers.any(Runnable.class));
+    doAnswer(invocation -> {
+      ((Runnable) invocation.getArgument(0)).run();
+      return null;
+    }).when(backendLoop).execute(org.mockito.ArgumentMatchers.any(Runnable.class));
+    ClientConfigSessionHandler handler = new ClientConfigSessionHandler(
+        server, player, relay, postLogin);
+
+    if (postLoginFirst) {
+      postLogin.complete(null);
+    } else {
+      handler.handle(first);
+    }
+    verify(login, never()).resumeRelayConfiguration(org.mockito.ArgumentMatchers.any());
+
+    if (postLoginFirst) {
+      handler.handle(first);
+    } else {
+      postLogin.complete(null);
+    }
+    handler.handle(duplicate);
+
+    verify(login, times(1)).resumeRelayConfiguration(first);
+    verify(login, never()).resumeRelayConfiguration(duplicate);
   }
 
   @Test
