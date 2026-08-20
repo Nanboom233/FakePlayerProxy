@@ -21,7 +21,6 @@ import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.CompletableFuture;
-import java.util.concurrent.CompletionException;
 import java.util.function.Function;
 
 import org.geysermc.mcprotocollib.network.packet.Packet;
@@ -261,35 +260,32 @@ public final class AutomationService {
             return null;
         }
         if (reconnectFuture != null) {
-            if (!reconnectFuture.isDone()) {
-                return null;
-            }
-            try {
-                ConnectionRequestBuilder.Result result = reconnectFuture.join();
-                if (result.isSuccessful()) {
+            var current = reconnectFuture;
+            return switch (current.state()) {
+                case RUNNING -> null;
+                case CANCELLED -> {
+                    reconnectFuture = null;
+                    yield null;
+                }
+                case SUCCESS -> {
+                    ConnectionRequestBuilder.Result result = current.resultNow();
                     reconnectFuture = null;
                     nextReconnectNanos = System.nanoTime()
                             + java.util.concurrent.TimeUnit.SECONDS.toNanos(
                             nextReconnectDelaySeconds());
-                    return new IllegalStateException(
-                            "Backend reconnect ended before ready PLAY");
+                    yield result.isSuccessful()
+                            ? new IllegalStateException("Backend reconnect ended before ready PLAY")
+                            : new IllegalStateException(
+                            "Backend reconnect completed with status " + result.getStatus());
                 }
-                reconnectFuture = null;
-                nextReconnectNanos = System.nanoTime()
-                        + java.util.concurrent.TimeUnit.SECONDS.toNanos(
-                        nextReconnectDelaySeconds());
-                return new IllegalStateException(
-                        "Backend reconnect completed with status " + result.getStatus());
-            } catch (CompletionException failure) {
-                reconnectFuture = null;
-                nextReconnectNanos = System.nanoTime()
-                        + java.util.concurrent.TimeUnit.SECONDS.toNanos(
-                        nextReconnectDelaySeconds());
-                return failure.getCause() == null ? failure : failure.getCause();
-            } catch (java.util.concurrent.CancellationException ignored) {
-                reconnectFuture = null;
-                return null;
-            }
+                case FAILED -> {
+                    reconnectFuture = null;
+                    nextReconnectNanos = System.nanoTime()
+                            + java.util.concurrent.TimeUnit.SECONDS.toNanos(
+                            nextReconnectDelaySeconds());
+                    yield current.exceptionNow();
+                }
+            };
         }
         if (System.nanoTime() < nextReconnectNanos) {
             return null;
@@ -349,13 +345,23 @@ public final class AutomationService {
         var eventLoop = owner.eventLoop();
         if (!eventLoop.inEventLoop()) {
             CompletableFuture<Boolean> result = new CompletableFuture<>();
-            eventLoop.execute(() -> shadow().whenComplete((enabled, failure) -> {
-                if (failure == null) {
-                    result.complete(enabled);
-                } else {
-                    result.completeExceptionally(failure);
-                }
-            }));
+            try {
+                eventLoop.execute(() -> {
+                    try {
+                        shadow().whenComplete((enabled, failure) -> {
+                            if (failure == null) {
+                                result.complete(enabled);
+                            } else {
+                                result.completeExceptionally(failure);
+                            }
+                        });
+                    } catch (Throwable bodyFailure) {
+                        result.completeExceptionally(bodyFailure);
+                    }
+                });
+            } catch (Throwable submissionFailure) {
+                result.completeExceptionally(submissionFailure);
+            }
             return result;
         }
         MinecraftConnection backend = owner.backendConnection();

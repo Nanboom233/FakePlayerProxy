@@ -114,6 +114,68 @@ final class AutomationServiceTest {
     }
 
     @Test
+    void failedReconnectReturnsTheOriginalFailureAndSchedulesADelay() {
+        prepareLoadedWorld();
+        assertTrue(service.shadow().join());
+        service.enableAutoReconnect(new byte[]{1});
+        IllegalStateException failure = new IllegalStateException("reconnect failed");
+        when(velocityPlayer.reconnectShadow(eq(serverConnection), any(byte[].class)))
+                .thenReturn(java.util.concurrent.CompletableFuture.failedFuture(failure));
+
+        assertTrue(service.prepareReconnect());
+        org.junit.jupiter.api.Assertions.assertNull(service.tickReconnect());
+        org.junit.jupiter.api.Assertions.assertSame(failure, service.tickReconnect());
+        org.junit.jupiter.api.Assertions.assertNull(service.tickReconnect());
+        verify(velocityPlayer, times(1)).reconnectShadow(eq(serverConnection), any(byte[].class));
+    }
+
+    @Test
+    void cancelledReconnectCanRetryWithoutAddingADelay() {
+        prepareLoadedWorld();
+        assertTrue(service.shadow().join());
+        service.enableAutoReconnect(new byte[]{1});
+        var cancelled = new java.util.concurrent.CompletableFuture<ConnectionRequestBuilder.Result>();
+        cancelled.cancel(false);
+        when(velocityPlayer.reconnectShadow(eq(serverConnection), any(byte[].class)))
+                .thenReturn(cancelled, new java.util.concurrent.CompletableFuture<>());
+
+        assertTrue(service.prepareReconnect());
+        org.junit.jupiter.api.Assertions.assertNull(service.tickReconnect());
+        org.junit.jupiter.api.Assertions.assertNull(service.tickReconnect());
+        org.junit.jupiter.api.Assertions.assertNull(service.tickReconnect());
+        verify(velocityPlayer, times(2)).reconnectShadow(eq(serverConnection), any(byte[].class));
+    }
+
+    @Test
+    void shadowReportsEventLoopSubmissionAndBodyFailures() {
+        Player owner = mock(Player.class);
+        EventLoop loop = mock(EventLoop.class);
+        when(owner.eventLoop()).thenReturn(loop);
+        when(loop.inEventLoop()).thenReturn(false);
+        doThrow(new java.util.concurrent.RejectedExecutionException("closed"))
+                .when(loop).execute(any(Runnable.class));
+        AutomationService scheduler = new AutomationService(owner);
+
+        var submission = org.junit.jupiter.api.Assertions.assertThrows(
+                java.util.concurrent.CompletionException.class, () -> scheduler.shadow().join());
+        assertInstanceOf(java.util.concurrent.RejectedExecutionException.class,
+                submission.getCause());
+
+        EventLoop bodyLoop = mock(EventLoop.class);
+        when(owner.eventLoop()).thenReturn(bodyLoop);
+        when(bodyLoop.inEventLoop()).thenReturn(false, true);
+        org.mockito.Mockito.doAnswer(invocation -> {
+            ((Runnable) invocation.getArgument(0)).run();
+            return null;
+        }).when(bodyLoop).execute(any(Runnable.class));
+        when(owner.backendConnection()).thenThrow(new IllegalStateException("missing backend"));
+
+        var body = org.junit.jupiter.api.Assertions.assertThrows(
+                java.util.concurrent.CompletionException.class, () -> scheduler.shadow().join());
+        assertInstanceOf(IllegalStateException.class, body.getCause());
+    }
+
+    @Test
     void oneShotAndIntervalWaitForTheirActionTicks() {
         assertInstanceOf(Result.Success.class, service.dropSelectedItem(false, ActionMode.ONCE, 0));
         verify(backend, never()).sendPacket(argThat(packet -> packet instanceof ServerboundPlayerActionPacket));

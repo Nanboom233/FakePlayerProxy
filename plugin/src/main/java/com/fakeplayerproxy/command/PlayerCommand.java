@@ -51,13 +51,13 @@ public final class PlayerCommand {
                 .executes(context -> execute(context, player -> player.automationService().stopActions()))
                 .build();
         var kill = literalArgumentBuilder("kill")
-                .requiresWithContext((context, reader) -> isShadowTarget(context))
+                .requiresWithContext((context, _) -> isShadowTarget(context))
                 .executes(context -> execute(context, automationManager::kill))
                 .build();
         var shadow = literalArgumentBuilder("shadow")
                 .executes(context -> execute(
                         context,
-                        (player, source) -> {
+                        (player, _) -> {
                             return player.automationService().shadow();
                         }))
                 .build();
@@ -67,7 +67,7 @@ public final class PlayerCommand {
                 "use", player -> player.automationService()::use).build();
         var jump = scheduledAction(
                 "jump", player -> player.automationService()::jump)
-                .requiresWithContext((context, reader) -> isShadowTarget(context))
+                .requiresWithContext((context, _) -> isShadowTarget(context))
                 .build();
         var attack = scheduledAction(
                 "attack", player -> player.automationService()::attack).build();
@@ -115,15 +115,15 @@ public final class PlayerCommand {
                 .executes(context -> execute(context, player -> player.automationService().setSneak(false)))
                 .build();
         var sprint = literalArgumentBuilder("sprint")
-                .requiresWithContext((context, reader) -> isShadowTarget(context))
+                .requiresWithContext((context, _) -> isShadowTarget(context))
                 .executes(context -> execute(context, player -> player.automationService().setSprint(true)))
                 .build();
         var unsprint = literalArgumentBuilder("unsprint")
-                .requiresWithContext((context, reader) -> isShadowTarget(context))
+                .requiresWithContext((context, _) -> isShadowTarget(context))
                 .executes(context -> execute(context, player -> player.automationService().setSprint(false)))
                 .build();
         var move = literalArgumentBuilder("move")
-                .requiresWithContext((context, reader) -> isShadowTarget(context))
+                .requiresWithContext((context, _) -> isShadowTarget(context))
                 .executes(context -> execute(context, player -> player.automationService().move(null)));
         for (String direction : new String[] {"forward", "backward", "left", "right"}) {
             move.then(literalArgumentBuilder(direction).executes(context -> execute(

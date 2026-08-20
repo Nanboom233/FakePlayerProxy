@@ -266,13 +266,13 @@ public class LivingEntity extends Entity {
         double originalVerticalMovement = velocity().getY();
         Vector3d requested = velocity();
         if (inWater()) {
-            travelInWater(world, requested, input, sprinting);
+            travelInWater(world, input, sprinting);
         } else if (inLava()) {
-            travelInLava(world, requested, input, sprinting);
+            travelInLava(world, input, sprinting);
         } else if (fallFlying() && gliderEquipped) {
             travelGliding(world, requested);
         } else {
-            travelInAir(world, requested, input, sprinting, flying);
+            travelInAir(world, input, sprinting, flying);
         }
         if (flying) {
             Vector3d moved = velocity();
@@ -284,7 +284,7 @@ public class LivingEntity extends Entity {
     }
 
     private void travelInAir(
-            World world, Vector3d requested, Vector3d input, boolean sprinting, boolean flying) {
+            World world, Vector3d input, boolean sprinting, boolean flying) {
         double blockFriction = onGround() ? world.blockBelow(this).friction() : 1.0;
         double effectiveSpeed = effectiveMovementSpeed() * (sprinting ? 1.3 : 1.0);
         double acceleration = flying ? (sprinting ? 0.1 : 0.05)
@@ -293,7 +293,7 @@ public class LivingEntity extends Entity {
                 ? 0.21600002 / (blockFriction * blockFriction * blockFriction) : 1.0)
                 : sprinting ? 0.026 : 0.02;
         applyRelativeInput(input, acceleration);
-        requested = velocity();
+        Vector3d requested = velocity();
         boolean climbable = world.hasBehavior(this, Block.Behavior.CLIMBABLE)
                 || canWalkOnPowderSnow && world.hasBehavior(this, Block.Behavior.POWDER_SNOW);
         if (climbable) {
@@ -322,8 +322,7 @@ public class LivingEntity extends Entity {
         setVelocity(Vector3d.from(moved.getX() * friction, vertical * 0.98, moved.getZ() * friction));
     }
 
-    private void travelInWater(
-            World world, Vector3d requested, Vector3d input, boolean sprinting) {
+    private void travelInWater(World world, Vector3d input, boolean sprinting) {
         double waterEfficiency = onGround()
                 ? waterMovementEfficiency : waterMovementEfficiency * 0.5;
         double drag = sprinting ? 0.9 : 0.8;
@@ -334,7 +333,7 @@ public class LivingEntity extends Entity {
                     * waterEfficiency;
         }
         applyRelativeInput(input, acceleration);
-        requested = velocity();
+        Vector3d requested = velocity();
         double oldY = position().getY();
         boolean falling = requested.getY() <= 0.0;
         move(world, requested, effectiveStepHeight);
@@ -348,10 +347,9 @@ public class LivingEntity extends Entity {
         setVelocity(jumpOutOfFluid(world, oldY, adjusted));
     }
 
-    private void travelInLava(
-            World world, Vector3d requested, Vector3d input, boolean sprinting) {
+    private void travelInLava(World world, Vector3d input, boolean sprinting) {
         applyRelativeInput(input, 0.02);
-        requested = velocity();
+        Vector3d requested = velocity();
         double oldY = position().getY();
         boolean falling = requested.getY() <= 0.0;
         move(world, requested, effectiveStepHeight);

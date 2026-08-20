@@ -80,14 +80,14 @@ public final class Decoder {
         this.outlineShapes = outlineShapes;
         this.entities = entities;
         this.items = items;
-        Map<Key, Integer> fixedItemIds = new HashMap<>();
+        Map<Key, Integer> fixedItemIds = HashMap.newHashMap(items.length);
         for (int itemId = 0; itemId < items.length; itemId++) {
             if (fixedItemIds.put(items[itemId].registryKey(), itemId) != null) {
                 throw new IllegalStateException("Duplicate fixed item key " + items[itemId].registryKey());
             }
         }
         itemIds = Map.copyOf(fixedItemIds);
-        Map<String, Integer> stateIds = new HashMap<>();
+        Map<String, Integer> stateIds = HashMap.newHashMap(blocks.length);
         for (int stateId = 0; stateId < blocks.length; stateId++) {
             if (stateIds.put(blocks[stateId].stateKey(), stateId) != null) {
                 throw new IllegalStateException("Duplicate fixed block state key " + blocks[stateId].stateKey());
@@ -180,6 +180,7 @@ public final class Decoder {
         return List.copyOf(resolved);
     }
 
+    @SuppressWarnings("PatternValidation")
     private static Decoder load() {
         try {
             byte[] resource;
@@ -200,7 +201,7 @@ public final class Decoder {
                 int carrotOnAStickItemId = header[8];
                 int warpedFungusOnAStickItemId = header[9];
                 int harnessCount = input.readUnsignedShort();
-                Set<Integer> harnessItemIds = new HashSet<>();
+                Set<Integer> harnessItemIds = HashSet.newHashSet(harnessCount);
                 for (int index = 0; index < harnessCount; index++) {
                     harnessItemIds.add(input.readInt());
                 }
@@ -230,7 +231,7 @@ public final class Decoder {
                     //noinspection PatternValidation
                     Key registryKey = Key.key(input.readUTF());
                     int featureCount = input.readUnsignedShort();
-                    Set<Key> features = new HashSet<>();
+                    Set<Key> features = HashSet.newHashSet(featureCount);
                     for (int feature = 0; feature < featureCount; feature++) {
                         // IDEA's validation warning is a false positive. Decoder checks this generator-owned key.
                         //noinspection PatternValidation
@@ -254,13 +255,15 @@ public final class Decoder {
                         List<ItemData.ToolData.Rule> rules = new ArrayList<>(ruleCount);
                         for (int ruleIndex = 0; ruleIndex < ruleCount; ruleIndex++) {
                             Key tag = null;
-                            Set<Key> blocks = new HashSet<>();
+                            Set<Key> blocks;
                             if (input.readBoolean()) {
+                                blocks = Set.of();
                                 // IDEA's validation warning is a false positive. Decoder checks this generator-owned key.
                                 //noinspection PatternValidation
                                 tag = Key.key(input.readUTF());
                             } else {
                                 int blockHolderCount = input.readUnsignedShort();
+                                blocks = HashSet.newHashSet(blockHolderCount);
                                 for (int holder = 0; holder < blockHolderCount; holder++) {
                                     // IDEA's validation warning is a false positive. Decoder checks this generator-owned key.
                                     //noinspection PatternValidation
@@ -409,6 +412,7 @@ public final class Decoder {
         return input;
     }
 
+    @SuppressWarnings("SameParameterValue")
     private static int[] readInts(DataInputStream input, int count) throws IOException {
         int[] values = new int[count];
         for (int index = 0; index < count; index++) {

@@ -273,24 +273,29 @@ public final class Player extends LivingEntity {
             continuousAttackEntityId = null;
             return new Result.Success<>(false);
         }
-        if (hit.get() instanceof InteractionHit.EntityHit entityHit) {
-            if (continuous && Objects.equals(continuousAttackEntityId, entityHit.entity().id())) {
+        InteractionHit.BlockHit blockHit;
+        switch (hit.get()) {
+            case InteractionHit.EntityHit entityHit -> {
+                if (continuous && Objects.equals(
+                        continuousAttackEntityId, entityHit.entity().id())) {
+                    return new Result.Success<>(true);
+                }
+                Result<Void, String> attack = send(
+                        backend, new ServerboundAttackPacket(entityHit.entity().id()));
+                if (attack instanceof Result.Failure<Void, String>(var error)) {
+                    return new Result.Failure<>(error);
+                }
+                Result<Void, String> swing = send(
+                        backend, new ServerboundSwingPacket(Hand.MAIN_HAND));
+                if (swing instanceof Result.Failure<Void, String>(var error)) {
+                    return new Result.Failure<>(error);
+                }
+                continuousAttackEntityId = continuous ? entityHit.entity().id() : null;
                 return new Result.Success<>(true);
             }
-            Result<Void, String> attack = send(
-                    backend, new ServerboundAttackPacket(entityHit.entity().id()));
-            if (attack instanceof Result.Failure<Void, String>(var error)) {
-                return new Result.Failure<>(error);
-            }
-            Result<Void, String> swing = send(backend, new ServerboundSwingPacket(Hand.MAIN_HAND));
-            if (swing instanceof Result.Failure<Void, String>(var error)) {
-                return new Result.Failure<>(error);
-            }
-            continuousAttackEntityId = continuous ? entityHit.entity().id() : null;
-            return new Result.Success<>(true);
+            case InteractionHit.BlockHit value -> blockHit = value;
         }
         continuousAttackEntityId = null;
-        InteractionHit.BlockHit blockHit = (InteractionHit.BlockHit) hit.get();
         if (!blockHit.insideWorldBorder()
                 || gameMode == GameMode.SPECTATOR || gameMode == GameMode.ADVENTURE) {
             return new Result.Success<>(false);
@@ -385,26 +390,33 @@ public final class Player extends LivingEntity {
                 continue;
             }
             if (hit.isPresent()) {
-                InteractionHit value = hit.get();
-                if (value instanceof InteractionHit.EntityHit entityHit) {
-                    Result<Void, String> interact = send(backend, new ServerboundInteractPacket(
-                            entityHit.entity().id(), hand,
-                            entityHit.hitPoint().sub(entityHit.entity().position()), inputState.shift()));
-                    if (interact instanceof Result.Failure<Void, String>(var error)) {
-                        return new Result.Failure<>(error);
+                switch (hit.get()) {
+                    case InteractionHit.EntityHit entityHit -> {
+                        Result<Void, String> interact = send(
+                                backend, new ServerboundInteractPacket(
+                                entityHit.entity().id(), hand,
+                                entityHit.hitPoint().sub(entityHit.entity().position()),
+                                inputState.shift()));
+                        if (interact instanceof Result.Failure<Void, String>(var error)) {
+                            return new Result.Failure<>(error);
+                        }
                     }
-                } else if (value instanceof InteractionHit.BlockHit blockHit) {
-                    if (!blockHit.insideWorldBorder()) {
-                        return new Result.Success<>(false);
-                    }
-                    Vector3d cursor = blockHit.hitPoint().sub(Vector3d.from(
-                            blockHit.position().getX(), blockHit.position().getY(), blockHit.position().getZ()));
-                    Result<Void, String> blockUse = send(backend, new ServerboundUseItemOnPacket(
-                            blockHit.position(), blockHit.face(), hand,
-                            (float) cursor.getX(), (float) cursor.getY(), (float) cursor.getZ(),
-                            blockHit.insideBlock(), false, nextInteractionSequence()));
-                    if (blockUse instanceof Result.Failure<Void, String>(var error)) {
-                        return new Result.Failure<>(error);
+                    case InteractionHit.BlockHit blockHit -> {
+                        if (!blockHit.insideWorldBorder()) {
+                            return new Result.Success<>(false);
+                        }
+                        Vector3d cursor = blockHit.hitPoint().sub(Vector3d.from(
+                                blockHit.position().getX(), blockHit.position().getY(),
+                                blockHit.position().getZ()));
+                        Result<Void, String> blockUse = send(
+                                backend, new ServerboundUseItemOnPacket(
+                                blockHit.position(), blockHit.face(), hand,
+                                (float) cursor.getX(), (float) cursor.getY(),
+                                (float) cursor.getZ(), blockHit.insideBlock(), false,
+                                nextInteractionSequence()));
+                        if (blockUse instanceof Result.Failure<Void, String>(var error)) {
+                            return new Result.Failure<>(error);
+                        }
                     }
                 }
             }

@@ -662,9 +662,9 @@ public final class World {
         if (blockTags == null) {
             this.blockTags = Map.of();
         } else {
-            Map<Key, Set<Integer>> copied = new HashMap<>();
+            Map<Key, Set<Integer>> copied = HashMap.newHashMap(blockTags.size());
             blockTags.forEach((key, values) -> {
-                Set<Integer> ids = new HashSet<>();
+                Set<Integer> ids = HashSet.newHashSet(values.length);
                 for (int value : values) {
                     ids.add(value);
                 }
@@ -675,7 +675,7 @@ public final class World {
         if (climbable == null) {
             climbableBlockIds = Set.of();
         } else {
-            Set<Integer> ids = new HashSet<>();
+            Set<Integer> ids = HashSet.newHashSet(climbable.length);
             for (int id : climbable) {
                 ids.add(id);
             }
@@ -959,8 +959,7 @@ public final class World {
         for (Pair<Vector3i, Integer> move : moves) {
             setBlockState(move.left(), airState);
         }
-        for (int index = moves.size() - 1; index >= 0; index--) {
-            Pair<Vector3i, Integer> move = moves.get(index);
+        for (Pair<Vector3i, Integer> move : moves.reversed()) {
             Vector3i destination = relative(move.left(), direction, 1);
             setBlockState(destination, movingState);
             movingPistons.put(destination, new MovingPiston(

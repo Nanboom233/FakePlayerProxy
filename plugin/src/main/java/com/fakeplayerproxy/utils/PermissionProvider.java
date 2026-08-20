@@ -68,9 +68,10 @@ public final class PermissionProvider implements AutoCloseable {
             if (!document.isJsonArray()) {
                 return new Result.Failure<>("The operator document must be a JSON array.");
             }
-            Map<UUID, String> loaded = new HashMap<>();
-            Set<String> names = new HashSet<>();
-            for (JsonElement element : document.getAsJsonArray()) {
+            JsonArray entries = document.getAsJsonArray();
+            Map<UUID, String> loaded = HashMap.newHashMap(entries.size());
+            Set<String> names = HashSet.newHashSet(entries.size());
+            for (JsonElement element : entries) {
                 if (!element.isJsonObject()) {
                     return new Result.Failure<>("Every operator entry must be a JSON object.");
                 }
@@ -138,7 +139,7 @@ public final class PermissionProvider implements AutoCloseable {
             candidate.put(uuid, name);
             Result<Void, String> saved = save(candidate);
             return switch (saved) {
-                case Result.Success<Void, String>(var ignored) -> new Result.Success<>(name);
+                case Result.Success<Void, String>(_) -> new Result.Success<>(name);
                 case Result.Failure<Void, String>(var error) -> new Result.Failure<>(error);
             };
         }, executor);
@@ -157,7 +158,7 @@ public final class PermissionProvider implements AutoCloseable {
             candidate.remove(removed.getKey());
             Result<Void, String> saved = save(candidate);
             return switch (saved) {
-                case Result.Success<Void, String>(var ignored) ->
+                case Result.Success<Void, String>(_) ->
                         new Result.Success<>(Optional.of(removed.getValue()));
                 case Result.Failure<Void, String>(var error) -> new Result.Failure<>(error);
             };
@@ -196,7 +197,7 @@ public final class PermissionProvider implements AutoCloseable {
             if (temporary != null) {
                 try {
                     Files.deleteIfExists(temporary);
-                } catch (IOException ignored) {
+                } catch (IOException _) {
                     // The failed temporary file is not active configuration.
                 }
             }

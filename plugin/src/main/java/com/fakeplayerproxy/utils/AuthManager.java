@@ -133,29 +133,43 @@ public final class AuthManager {
         }
 
         var eventLoop = player.eventLoop();
-        eventLoop.execute(() -> {
-            if (currentPlayer(velocityPlayer, backend) != player
-                    || player.automationService().isClosed()) {
-                Arrays.fill(token, (byte) 0);
-                logger.warn("Auto-reconnect authorization response ignored for stale player {} ({}).",
-                        velocityPlayer.getUsername(), velocityPlayer.getUniqueId());
-                return;
-            }
-            if (token.length == 0) {
-                player.automationService().disableAutoReconnect();
-                logger.info("Auto-reconnect consent declined for {} ({}) on backend {}.",
+        Runnable applyAuthorization = () -> {
+            try {
+                if (currentPlayer(velocityPlayer, backend) != player
+                        || player.automationService().isClosed()) {
+                    logger.warn("Auto-reconnect authorization response ignored for stale player {} ({}).",
+                            velocityPlayer.getUsername(), velocityPlayer.getUniqueId());
+                    return;
+                }
+                if (token.length == 0) {
+                    player.automationService().disableAutoReconnect();
+                    logger.info("Auto-reconnect consent declined for {} ({}) on backend {}.",
+                            velocityPlayer.getUsername(), velocityPlayer.getUniqueId(),
+                            backend.getServerInfo().getName());
+                    return;
+                }
+                player.automationService().enableAutoReconnect(token);
+                velocityPlayer.sendMessage(Component.translatable(
+                        "fakeplayerproxy.command.auto_reconnect_enabled"));
+                logger.info("Auto-reconnect enabled for {} ({}) on backend {}.",
                         velocityPlayer.getUsername(), velocityPlayer.getUniqueId(),
                         backend.getServerInfo().getName());
-                return;
+            } catch (Throwable callbackFailure) {
+                logger.error("Cannot apply auto-reconnect authorization for {} ({}) on backend {}.",
+                        velocityPlayer.getUsername(), velocityPlayer.getUniqueId(),
+                        backend.getServerInfo().getName(), callbackFailure);
+            } finally {
+                Arrays.fill(token, (byte) 0);
             }
-            player.automationService().enableAutoReconnect(token);
+        };
+        try {
+            eventLoop.execute(applyAuthorization);
+        } catch (Throwable submissionFailure) {
             Arrays.fill(token, (byte) 0);
-            velocityPlayer.sendMessage(Component.translatable(
-                    "fakeplayerproxy.command.auto_reconnect_enabled"));
-            logger.info("Auto-reconnect enabled for {} ({}) on backend {}.",
+            logger.error("Cannot submit auto-reconnect authorization for {} ({}) on backend {}.",
                     velocityPlayer.getUsername(), velocityPlayer.getUniqueId(),
-                    backend.getServerInfo().getName());
-        });
+                    backend.getServerInfo().getName(), submissionFailure);
+        }
     }
 
     private com.fakeplayerproxy.world.player.Player currentPlayer(

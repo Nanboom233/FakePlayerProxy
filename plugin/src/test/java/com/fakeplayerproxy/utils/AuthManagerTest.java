@@ -1,5 +1,7 @@
 package com.fakeplayerproxy.utils;
 
+import static org.junit.jupiter.api.Assertions.assertArrayEquals;
+import static org.junit.jupiter.api.Assertions.assertDoesNotThrow;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
@@ -111,6 +113,45 @@ final class AuthManagerTest {
 
         assertFalse(service.isAutoReconnect());
         verify(velocityPlayer, never()).sendMessage(any());
+    }
+
+    @Test
+    void eventLoopSubmissionFailureIsContained() {
+        org.mockito.Mockito.doThrow(new java.util.concurrent.RejectedExecutionException("closed"))
+                .when(eventLoop).execute(any(Runnable.class));
+        byte[] token = UUID.randomUUID().toString().getBytes(StandardCharsets.UTF_8);
+        byte[] payload = new byte[token.length + 1];
+        payload[0] = (byte) token.length;
+        System.arraycopy(token, 0, payload, 1, token.length);
+
+        assertDoesNotThrow(() -> authManager.onPluginMessage(event(payload)));
+
+        assertFalse(service.isAutoReconnect());
+        verify(logger).error(
+                org.mockito.ArgumentMatchers.startsWith("Cannot submit auto-reconnect authorization"),
+                any(), any(), any(), any());
+    }
+
+    @Test
+    void callbackFailureIsContainedAndClearsTheTemporaryToken() {
+        AutomationService failingService = mock(AutomationService.class);
+        AtomicReference<byte[]> callbackToken = new AtomicReference<>();
+        when(player.automationService()).thenReturn(failingService);
+        doAnswer(invocation -> {
+            callbackToken.set(invocation.getArgument(0));
+            throw new IllegalStateException("apply failed");
+        }).when(failingService).enableAutoReconnect(any(byte[].class));
+        byte[] token = UUID.randomUUID().toString().getBytes(StandardCharsets.UTF_8);
+        byte[] payload = new byte[token.length + 1];
+        payload[0] = (byte) token.length;
+        System.arraycopy(token, 0, payload, 1, token.length);
+
+        assertDoesNotThrow(() -> authManager.onPluginMessage(event(payload)));
+
+        assertArrayEquals(new byte[token.length], callbackToken.get());
+        verify(logger).error(
+                org.mockito.ArgumentMatchers.startsWith("Cannot apply auto-reconnect authorization"),
+                any(), any(), any(), any());
     }
 
     private PluginMessageEvent event(byte[] payload) {

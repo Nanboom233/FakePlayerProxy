@@ -51,6 +51,7 @@ public final class PlayerInventory {
     @Accessors(fluent = true)
     private int openContainerId;
 
+    //noinspection unused
     public ItemStack slot(int slot) {
         return slots[slot];
     }
@@ -110,6 +111,7 @@ public final class PlayerInventory {
         return fixed(stack).attackRange().orElse(null);
     }
 
+    @SuppressWarnings("PatternValidation")
     public Pair<Float, Boolean> tool(ItemStack stack, Block block, World world) {
         ToolData patch = component(stack, DataComponentTypes.TOOL);
         if (hasPatch(stack, DataComponentTypes.TOOL)) {

@@ -65,7 +65,7 @@ public final class AutomationManager {
         if (!eventLoop.inEventLoop()) {
             CompletableFuture<Void> future = new CompletableFuture<>();
             try {
-                eventLoop.execute(() -> register(velocityPlayer).whenComplete((ignored, failure) -> {
+                eventLoop.execute(() -> register(velocityPlayer).whenComplete((_, failure) -> {
                     if (failure == null) {
                         future.complete(null);
                     } else {
@@ -128,7 +128,7 @@ public final class AutomationManager {
 
         CompletableFuture<Void> result = new CompletableFuture<>();
         CompletableFuture.allOf(closes.toArray(CompletableFuture[]::new))
-                .whenComplete((ignored, failure) -> {
+                .whenComplete((_, failure) -> {
                     try {
                         eventLoop.execute(() -> {
                             if (failure != null) {
@@ -180,7 +180,7 @@ public final class AutomationManager {
     @Subscribe
     public EventTask onPostLogin(PostLoginEvent event) {
         return EventTask.withContinuation(continuation ->
-                register(event.getPlayer()).whenComplete((ignored, failure) -> {
+                register(event.getPlayer()).whenComplete((_, failure) -> {
                     if (failure == null) {
                         continuation.resume();
                     } else {
@@ -283,7 +283,7 @@ public final class AutomationManager {
                         event.getPacket().getHash()))) {
                     return;
                 }
-            } catch (IllegalArgumentException ignored) {
+            } catch (IllegalArgumentException _) {
                 // A malformed required-pack hash cannot identify a pack already applied by the client.
             }
         }
@@ -378,10 +378,12 @@ public final class AutomationManager {
                                 velocityPlayer.getUniqueId(), backendName);
                     }
                     if (reconnectFailure != null) {
-                        if (reconnectFailure instanceof InvalidCredentialsException
-                                || reconnectFailure instanceof UserBannedException
-                                || reconnectFailure instanceof ForcedUsernameChangeException
-                                || reconnectFailure instanceof InsufficientPrivilegesException) {
+                        boolean credentialRejection = switch (reconnectFailure) {
+                            case InvalidCredentialsException _, UserBannedException _,
+                                 ForcedUsernameChangeException _, InsufficientPrivilegesException _ -> true;
+                            default -> false;
+                        };
+                        if (credentialRejection) {
                             logger.warn("Auto-reconnect disabled for {} ({}) on backend {}: credential rejection.",
                                     velocityPlayer.getUsername(), velocityPlayer.getUniqueId(),
                                     backendName);
