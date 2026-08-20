@@ -281,7 +281,7 @@ index 00000000..c51d2d3f
 +  }
 +}
 diff --git a/api/src/main/java/com/velocitypowered/api/proxy/Player.java b/api/src/main/java/com/velocitypowered/api/proxy/Player.java
-index c4b8703f..171f7ea2 100644
+index c4b8703f..6c8a7f35 100644
 --- a/api/src/main/java/com/velocitypowered/api/proxy/Player.java
 +++ b/api/src/main/java/com/velocitypowered/api/proxy/Player.java
 @@ -129,160 +129,167 @@ public interface Player extends
@@ -452,90 +452,6 @@ index c4b8703f..171f7ea2 100644
     *
     * @return collection of the pending resource packs
     */
-@@ -455,81 +462,81 @@ public interface Player extends
-    * <b>This method is not currently implemented in Velocity
-    * and will not perform any actions.</b>
-    *
-    * @see <a href="https://docs.papermc.io/velocity/dev/pitfalls/#audience-operations-are-not-fully-supported">
-    *   Unsupported Adventure Operations</a>
-    */
-   @Override
-   default void openBook(@NotNull Book book) {
-   }
- 
-   /**
-    * {@inheritDoc}
-    *
-    * <b>This method is not currently implemented in Velocity
-    * and will not perform any actions.</b>
-    *
-    * @see <a href="https://docs.papermc.io/velocity/dev/pitfalls/#audience-operations-are-not-fully-supported">
-    *   Unsupported Adventure Operations</a>
-    */
-   @Override
-   default void showDialog(@NotNull DialogLike dialog) {
-   }
- 
-   /**
-    * {@inheritDoc}
-    *
-    * <b>This method is not currently implemented in Velocity
-    * and will not perform any actions.</b>
-    *
-    * @see <a href="https://docs.papermc.io/velocity/dev/pitfalls/#audience-operations-are-not-fully-supported">
-    *   Unsupported Adventure Operations</a>
-    */
-   @Override
-   default void closeDialog() {
-   }
- 
-   /**
-    * Transfers a Player to a host.
-    *
-    * @param address the host address
-    * @throws IllegalArgumentException if the player is from a version lower than 1.20.5
-    * @since 3.3.0
-    */
-   void transferToHost(@NotNull InetSocketAddress address);
- 
-   /**
-    * Stores a cookie with arbitrary data on the player's client.
-    *
-    * @param key the identifier of the cookie
-    * @param data the data of the cookie
-    * @throws IllegalArgumentException if the player is from a version lower than 1.20.5
-    * @since 3.3.0
-    * @sinceMinecraft 1.20.5
-    */
-   void storeCookie(Key key, byte[] data);
- 
-   /**
-    * Requests a previously stored cookie from the player's client.
-    * Calling this method causes the client to send the cookie to the proxy.
-    * To retrieve the actual data of the requested cookie, you have to use the
-    * {@link CookieReceiveEvent}.
-    *
-    * @param key the identifier of the cookie
-    * @throws IllegalArgumentException if the player is from a version lower than 1.20.5
-    * @since 3.3.0
-    * @sinceMinecraft 1.20.5
-    */
-   void requestCookie(Key key);
- 
-   /**
-    * Send the player a list of custom links to display in their client's pause menu.
-    *
-    * <p>Note that later packets sent by the backend server may override links sent by the proxy.
-    *
-    * @param links an ordered list of {@link ServerLink}s to send to the player
-    * @throws IllegalArgumentException if the player is from a version lower than 1.21
-    * @since 3.3.0
-    * @sinceMinecraft 1.21
-    */
-   void setServerLinks(@NotNull List<ServerLink> links);
--}
-\ No newline at end of file
-+}
 diff --git a/proxy/build.gradle.kts b/proxy/build.gradle.kts
 index e6d48392..db1416bd 100644
 --- a/proxy/build.gradle.kts
@@ -2938,7 +2854,7 @@ index 00000000..cfebcb30
 +  }
 +}
 diff --git a/proxy/src/main/java/com/velocitypowered/proxy/event/VelocityEventManager.java b/proxy/src/main/java/com/velocitypowered/proxy/event/VelocityEventManager.java
-index 9d54b2d0..e22c0d80 100644
+index 9d54b2d0..5d7d0543 100644
 --- a/proxy/src/main/java/com/velocitypowered/proxy/event/VelocityEventManager.java
 +++ b/proxy/src/main/java/com/velocitypowered/proxy/event/VelocityEventManager.java
 @@ -1,577 +1,690 @@
@@ -3728,6 +3644,7 @@ index 9d54b2d0..e22c0d80 100644
 -}
 \ No newline at end of file
 +}
+\ No newline at end of file
 diff --git a/proxy/src/main/java/com/velocitypowered/proxy/protocol/netty/MinecraftDecoder.java b/proxy/src/main/java/com/velocitypowered/proxy/protocol/netty/MinecraftDecoder.java
 index 4d0062d4..61e9bcfd 100644
 --- a/proxy/src/main/java/com/velocitypowered/proxy/protocol/netty/MinecraftDecoder.java

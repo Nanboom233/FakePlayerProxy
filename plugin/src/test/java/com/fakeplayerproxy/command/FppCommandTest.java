@@ -11,6 +11,7 @@ import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 import com.fakeplayerproxy.utils.PermissionProvider;
+import com.fakeplayerproxy.utils.AuthManager;
 import com.mojang.brigadier.CommandDispatcher;
 import com.mojang.brigadier.exceptions.CommandSyntaxException;
 import com.velocitypowered.api.command.CommandSource;
@@ -101,7 +102,8 @@ final class FppCommandTest {
             PermissionProvider config) {
         CommandDispatcher<CommandSource> dispatcher = new CommandDispatcher<>();
         dispatcher.getRoot().addChild(
-                new FppCommand(server, config, mock(Logger.class)).create().getNode());
+                new FppCommand(server, config, mock(AuthManager.class), mock(Logger.class))
+                        .create().getNode());
         return dispatcher;
     }
 

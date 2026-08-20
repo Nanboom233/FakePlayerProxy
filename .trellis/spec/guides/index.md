@@ -24,6 +24,7 @@ These guides help you **ask the right questions before coding**.
 | [Code Reuse Thinking Guide](./code-reuse-thinking-guide.md) | Identify patterns and reduce duplication | When you notice repeated patterns |
 | [Cross-Layer Thinking Guide](./cross-layer-thinking-guide.md) | Think through data flow across layers | Features spanning multiple layers |
 | [Plan Writing Format](./plan-writing.md) | Describe concrete owners, operations, and resulting call paths | When writing or updating a task plan |
+| [Temporary Git State](./temporary-git-state.md) | Control temporary Git state and cleanup | When a task needs a temporary clone, worktree, ref, or index |
 
 ---
 
@@ -65,6 +66,14 @@ These guides help you **ask the right questions before coding**.
 3. **Variable misreading**: Not tracing a variable to its actual definition (e.g., Map keyed by path vs name)
 
 **Verification rule**: Every CRITICAL/WARNING finding must be verified against the actual code before prioritizing. Budget ~35% false-positive rate for AI reviews.
+
+### When Using Temporary Git State
+
+- [ ] A sub-agent needs a clone, worktree, ref, or index for verification.
+- [ ] Patch generation needs a temporary baseline.
+- [ ] An agent is about to report completion after temporary Git work.
+
+→ Read [Temporary Git State](./temporary-git-state.md)
 
 ---
 

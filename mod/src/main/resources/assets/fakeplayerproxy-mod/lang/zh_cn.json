@@ -22,5 +22,10 @@
   "fakeplayerproxy.command.operator_removed": "%s 已不再是 FakePlayerProxy 管理员。",
   "fakeplayerproxy.command.operator_not_found": "没有找到使用该名称保存的 FakePlayerProxy 管理员。",
   "fakeplayerproxy.command.operator_update_failed": "无法更新 FakePlayerProxy 管理员配置，请查看代理日志。",
-  "fakeplayerproxy.message.encryption_verified": "[FakePlayerProxy] AES 加密/解密验证成功。"
+  "fakeplayerproxy.message.encryption_verified": "[FakePlayerProxy] AES 加密/解密验证成功。",
+  "fakeplayerproxy.command.auto_reconnect_enabled": "自动重连已启用。",
+  "fakeplayerproxy.command.auto_reconnect_disabled": "自动重连已关闭。",
+  "fakeplayerproxy.auto_reconnect.consent.title": "授权使用访问令牌？",
+  "fakeplayerproxy.auto_reconnect.consent.body": "FakePlayerProxy 需要使用你的 Minecraft 访问令牌来启用自动重连。点击“允许”后，它可以使用该令牌，以你的账号身份自动重连。\n\n你的令牌不会保存到硬盘。自动重连停止后，FakePlayerProxy 会清除令牌。",
+  "fakeplayerproxy.auto_reconnect.consent.warning": "只在你信任的服务器上使用此功能！"
 }

@@ -2,7 +2,8 @@
 
 FakePlayerProxy runs an authenticated relay player on its original backend after
 the player's frontend enters Shadow state. The Velocity plugin owns both command
-roots locally; it does not create a second backend connection.
+roots locally. With explicit token consent, a Shadow can replace a lost backend
+connection to the same registered server.
 
 ## Version Target
 
@@ -115,10 +116,29 @@ Manage operators with:
 restart. `/player shadow` remains available to the exact command-source player
 without that permission.
 
+Enable or disable connection-scoped Shadow auto-reconnect before entering Shadow:
+
+```text
+/fpp auto-reconnect on
+/fpp auto-reconnect off
+```
+
+`on` always opens a new client consent screen. If allowed, the proxy holds the
+Minecraft access token only in memory so it can authorize a fresh online-mode
+backend Login after the frontend closes. There is no fixed retention time or
+retry limit. `off` and `/player kill` clear the token.
+
+The first reconnect attempt is immediate. Later failed attempts wait 10, 10,
+30, 30, 60, 60, and then 300 seconds repeatedly. Duplicate-login, profile-ban,
+IP-ban, required resource-pack, Code of Conduct, backend Transfer, and account
+credential rejection stop auto-reconnect. Other backend and transport failures retry.
+Proxy logs record consent, attempts, ready PLAY, terminal policy, and cleanup;
+they never contain token data.
+
 ## Known Limits
 
 - Automation is local to one proxy process.
-- The target must still have an active original backend connection.
+- Auto-reconnect returns only to the Shadow's same registered backend.
 - Operator state is not imported from backend `ops.json` files or another
   permission plugin.
 - Server-only Carpet branches, including `spawn` and `mount anything`, are not

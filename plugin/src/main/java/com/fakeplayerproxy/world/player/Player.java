@@ -89,13 +89,13 @@ public final class Player extends LivingEntity {
     private double submergedMiningSpeed = AttributeType.Builtin.SUBMERGED_MINING_SPEED.getDef();
     private int food = 20;
     // IDEA's unused warning is a false positive. The Minecraft backend owns this planned value.
-    //noinspection UnusedDeclaration
+    @SuppressWarnings("unused")
     private float saturation = 5.0f;
     // IDEA's unused warning is a false positive. The Minecraft backend owns this planned value.
-    //noinspection UnusedDeclaration
+    @SuppressWarnings("unused")
     private boolean invincible;
     // IDEA's unused warning is a false positive. The Minecraft backend owns this planned value.
-    //noinspection UnusedDeclaration
+    @SuppressWarnings("unused")
     private boolean infiniteMaterials;
     private boolean canFly;
     private final Map<Key, Integer> cooldowns = new HashMap<>();
@@ -183,6 +183,13 @@ public final class Player extends LivingEntity {
         }
         MinecraftConnection connection = serverConnection.getConnection();
         return connection != null && connection.getChannel().isActive() ? connection : null;
+    }
+
+    public VelocityServerConnection serverConnection() {
+        if (!(velocityPlayer instanceof ConnectedPlayer connectedPlayer)) {
+            return null;
+        }
+        return connectedPlayer.getConnectionInFlightOrConnectedServer();
     }
 
     public EventLoop eventLoop() {
@@ -615,7 +622,6 @@ public final class Player extends LivingEntity {
         setCollisionFlags(false, false);
         setSharedFlags((byte) 0);
         noGravity(false);
-        setInputState(InputState.CLEAR);
         resetLivingState();
         resetMovementBaseline();
         inventory.reset();
@@ -798,6 +804,8 @@ public final class Player extends LivingEntity {
                 continue;
             }
             double value = calculateAttribute(attribute);
+            // IDEA's duplication warning is a false positive. MCProtocolLib owns the attribute type set.
+            //noinspection DuplicatedCode
             switch (builtin) {
                 case BLOCK_INTERACTION_RANGE -> blockInteractionRange = value;
                 case ENTITY_INTERACTION_RANGE -> entityInteractionRange = value;
@@ -993,7 +1001,6 @@ public final class Player extends LivingEntity {
         setCollisionFlags(false, false);
         setSharedFlags((byte) 0);
         noGravity(false);
-        setInputState(InputState.CLEAR);
         resetLivingState();
         resetMovementBaseline();
         resetInteractionState();

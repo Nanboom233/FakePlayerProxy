@@ -21,7 +21,8 @@
   "children": [
     "08-16-player-as-action-command",
     "08-17-deprecated-support-cleanup",
-    "08-17-complete-carpet-player-command-system"
+    "08-17-complete-carpet-player-command-system",
+    "08-19-auto-reconnect-research"
   ],
   "parent": null,
   "relatedFiles": [],

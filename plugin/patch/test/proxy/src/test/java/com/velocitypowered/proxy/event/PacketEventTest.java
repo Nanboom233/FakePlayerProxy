@@ -11,6 +11,7 @@ package com.velocitypowered.proxy.event;
 
 import static com.velocitypowered.proxy.testutil.FakePluginManager.PLUGIN_A;
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
@@ -21,6 +22,7 @@ import com.velocitypowered.api.event.Subscribe;
 import com.velocitypowered.api.event.connection.ServerboundPacketEvent;
 import com.velocitypowered.api.event.connection.ClientboundPacketEvent;
 import com.velocitypowered.api.proxy.Player;
+import com.velocitypowered.api.proxy.ServerConnection;
 import com.velocitypowered.proxy.testutil.FakePluginManager;
 import org.geysermc.mcprotocollib.network.packet.Packet;
 import org.geysermc.mcprotocollib.network.packet.PacketRegistry;
@@ -34,6 +36,7 @@ final class PacketEventTest {
   private final VelocityEventManager eventManager =
       new VelocityEventManager(new FakePluginManager());
   private final Player player = mock(Player.class);
+  private final ServerConnection source = mock(ServerConnection.class);
 
   @Test
   void replacesAndCancelsOneDecodedPacket() {
@@ -42,7 +45,7 @@ final class PacketEventTest {
         true, ProtocolState.GAME, serverboundKeepAliveId());
 
     ServerboundKeepAlivePacket replaced = (ServerboundKeepAlivePacket) handler.dispatch(
-        player, new ServerboundKeepAlivePacket(1));
+        player, source, new ServerboundKeepAlivePacket(1));
 
     assertEquals(2, replaced.getPingId());
 
@@ -51,19 +54,18 @@ final class PacketEventTest {
 
     eventManager.register(PLUGIN_A, new CancellingListener());
     handler = eventManager.packetHandler(true, ProtocolState.GAME, serverboundKeepAliveId());
-    assertNull(handler.dispatch(player, new ServerboundKeepAlivePacket(1)));
+    assertNull(handler.dispatch(player, source, new ServerboundKeepAlivePacket(1)));
   }
 
   @Test
-  void s2cListenerCanReplaceButHasNoCancelApi() throws Exception {
-    assertThrows(NoSuchMethodException.class, () -> ClientboundPacketEvent.class.getMethod("cancel"));
-    eventManager.register(PLUGIN_A, new S2cListener());
+  void s2cListenerReceivesTheExactSourceAndCanReplace() {
+    eventManager.register(PLUGIN_A, new S2cListener(source));
     PacketRegistry registry = MinecraftCodec.CODEC.getCodec(ProtocolState.GAME);
     int packetId = registry.getClientboundId(ClientboundKeepAlivePacket.class);
 
     PacketEventHandler handler = eventManager.packetHandler(false, ProtocolState.GAME, packetId);
     ClientboundKeepAlivePacket result = (ClientboundKeepAlivePacket) handler.dispatch(
-        player, new ClientboundKeepAlivePacket(3));
+        player, source, new ClientboundKeepAlivePacket(3));
 
     assertEquals(4, result.getPingId());
   }
@@ -96,7 +98,7 @@ final class PacketEventTest {
         true, ProtocolState.GAME, serverboundKeepAliveId());
     ServerboundKeepAlivePacket original = new ServerboundKeepAlivePacket(1);
 
-    assertEquals(original, handler.dispatch(player, original));
+    assertEquals(original, handler.dispatch(player, source, original));
   }
 
   private int serverboundKeepAliveId() {
@@ -119,9 +121,17 @@ final class PacketEventTest {
   }
 
   private static final class S2cListener {
+    private final ServerConnection source;
+
+    private S2cListener(ServerConnection source) {
+      this.source = source;
+    }
+
     @Subscribe(async = false)
     public void onPacket(ClientboundPacketEvent<ClientboundKeepAlivePacket> event) {
       assertTrue(event.getPlayer() != null);
+      assertTrue(event.isSource(source));
+      assertFalse(event.isSource(mock(ServerConnection.class)));
       event.setPacket(new ClientboundKeepAlivePacket(4));
     }
   }

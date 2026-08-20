@@ -22,5 +22,10 @@
   "fakeplayerproxy.command.operator_removed": "%s is no longer a FakePlayerProxy operator.",
   "fakeplayerproxy.command.operator_not_found": "No saved FakePlayerProxy operator has that name.",
   "fakeplayerproxy.command.operator_update_failed": "Could not update the FakePlayerProxy operator configuration. Check the proxy log.",
-  "fakeplayerproxy.message.encryption_verified": "[FakePlayerProxy] AES encryption/decryption verified."
+  "fakeplayerproxy.message.encryption_verified": "[FakePlayerProxy] AES encryption/decryption verified.",
+  "fakeplayerproxy.command.auto_reconnect_enabled": "Auto-reconnect is enabled.",
+  "fakeplayerproxy.command.auto_reconnect_disabled": "Auto-reconnect is disabled.",
+  "fakeplayerproxy.auto_reconnect.consent.title": "Allow access token use?",
+  "fakeplayerproxy.auto_reconnect.consent.body": "FakePlayerProxy needs your Minecraft access token to enable auto-reconnect. If you select Allow, it can use the token to reconnect as your account.\n\nYour token is not saved to disk. FakePlayerProxy clears it when auto-reconnect stops.",
+  "fakeplayerproxy.auto_reconnect.consent.warning": "Only use this feature on a server that you trust!"
 }

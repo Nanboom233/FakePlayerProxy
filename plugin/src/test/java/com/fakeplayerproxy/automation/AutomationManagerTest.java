@@ -19,6 +19,7 @@ import com.velocitypowered.proxy.connection.MinecraftConnection;
 import com.fakeplayerproxy.utils.Result;
 import com.velocitypowered.proxy.connection.backend.VelocityServerConnection;
 import com.velocitypowered.proxy.connection.client.ConnectedPlayer;
+import com.velocitypowered.api.event.connection.ClientboundPacketEvent;
 import io.netty.channel.Channel;
 import io.netty.channel.ChannelFuture;
 import io.netty.channel.EventLoop;
@@ -27,6 +28,9 @@ import java.util.UUID;
 import java.util.concurrent.TimeUnit;
 import org.junit.jupiter.api.Test;
 import org.slf4j.Logger;
+import org.geysermc.mcprotocollib.protocol.packet.common.clientbound.ClientboundTransferPacket;
+import org.geysermc.mcprotocollib.protocol.packet.common.clientbound.ClientboundDisconnectPacket;
+import net.kyori.adventure.text.Component;
 
 final class AutomationManagerTest {
     private final Logger logger = mock(Logger.class);
@@ -127,6 +131,49 @@ final class AutomationManagerTest {
                 any(IllegalStateException.class));
     }
 
+    @Test
+    void transferClosesOnlyTheAutomationOwnedByTheExactSource() {
+        ConnectedPlayer velocityPlayer = player(UUID.randomUUID(), true);
+        manager.register(velocityPlayer).join();
+        com.fakeplayerproxy.world.player.Player player = manager.get(velocityPlayer);
+        VelocityServerConnection source = velocityPlayer.getConnectionInFlightOrConnectedServer();
+        MinecraftConnection backend = source.getConnection();
+        player.automationService().enableAutoReconnect(new byte[]{1});
+        ClientboundTransferPacket packet = new ClientboundTransferPacket("example.test", 25565);
+
+        manager.onTransfer(new ClientboundPacketEvent<>(
+                velocityPlayer, mock(VelocityServerConnection.class),
+                ClientboundTransferPacket.class, packet));
+        assertSame(player, manager.get(velocityPlayer));
+
+        manager.onTransfer(new ClientboundPacketEvent<>(
+                velocityPlayer, source, ClientboundTransferPacket.class, packet));
+        assertNull(manager.get(velocityPlayer));
+        assertFalse(player.automationService().isAutoReconnect());
+        verify(backend).close();
+    }
+
+    @Test
+    void onlyRecognizedDisconnectKeysApplyTerminalPolicy() {
+        ConnectedPlayer velocityPlayer = player(UUID.randomUUID(), true);
+        manager.register(velocityPlayer).join();
+        com.fakeplayerproxy.world.player.Player player = manager.get(velocityPlayer);
+        VelocityServerConnection source = velocityPlayer.getConnectionInFlightOrConnectedServer();
+        player.automationService().enableAutoReconnect(new byte[]{1});
+
+        manager.onDisconnectPacket(new ClientboundPacketEvent<>(
+                velocityPlayer, source, ClientboundDisconnectPacket.class,
+                new ClientboundDisconnectPacket(Component.text("maintenance"))));
+        assertSame(player, manager.get(velocityPlayer));
+
+        manager.onDisconnectPacket(new ClientboundPacketEvent<>(
+                velocityPlayer, source, ClientboundDisconnectPacket.class,
+                new ClientboundDisconnectPacket(Component.translatable(
+                        "multiplayer.disconnect.duplicate_login"))));
+        assertNull(manager.get(velocityPlayer));
+        assertFalse(player.automationService().isAutoReconnect());
+    }
+
     private static ConnectedPlayer player(UUID uuid, boolean backendActive) {
         ConnectedPlayer player = mock(ConnectedPlayer.class);
         MinecraftConnection frontend = mock(MinecraftConnection.class);
@@ -142,6 +189,8 @@ final class AutomationManagerTest {
             ChannelFuture closeFuture = mock(ChannelFuture.class);
             when(player.getConnectionInFlightOrConnectedServer()).thenReturn(serverConnection);
             when(serverConnection.getConnection()).thenReturn(backend);
+            when(serverConnection.getServerInfo()).thenReturn(
+                    mock(com.velocitypowered.api.proxy.server.ServerInfo.class));
             when(backend.getChannel()).thenReturn(channel);
             when(channel.isActive()).thenReturn(true);
             when(channel.closeFuture()).thenReturn(closeFuture);

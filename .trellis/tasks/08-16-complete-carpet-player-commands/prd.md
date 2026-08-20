@@ -89,6 +89,7 @@ documentation so the public command contract matches the implementation.
 | --- | --- | --- |
 | `08-16-player-as-action-command` | Add `/player as <player> <action>`, permission checks, and stable automation target lookup. | This command layer must exist before later action children expose remote actions. |
 | `08-17-complete-carpet-player-command-system` | Implement all feasible action branches and omit server-only branches. | The shared self and target command structure must remain intact. |
+| `08-19-auto-reconnect-research` | Research session-scoped authorization and shadow backend auto-reconnect feasibility. | The existing shadow lifecycle and client-mod payload boundary are the baseline. |
 
 ## Product Boundary
 

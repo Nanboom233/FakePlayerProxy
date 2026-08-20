@@ -1,0 +1,749 @@
+package com.fakeplayerproxy.utils;
+
+import com.fakeplayerproxy.automation.AutomationManager;
+import com.fakeplayerproxy.world.data.Decoder;
+import com.velocitypowered.api.event.EventTask;
+import com.velocitypowered.api.event.Subscribe;
+import com.velocitypowered.api.event.connection.ServerboundPacketEvent;
+import com.velocitypowered.api.event.connection.ClientboundPacketEvent;
+import com.velocitypowered.api.event.player.ServerPostConnectEvent;
+import com.velocitypowered.api.event.player.configuration.PlayerEnterConfigurationEvent;
+import com.velocitypowered.api.event.player.configuration.PlayerFinishedConfigurationEvent;
+import com.velocitypowered.api.proxy.Player;
+import com.velocitypowered.proxy.connection.MinecraftConnection;
+
+import java.util.function.BiConsumer;
+
+import net.kyori.adventure.text.Component;
+import net.kyori.adventure.text.format.NamedTextColor;
+import org.geysermc.mcprotocollib.protocol.packet.common.clientbound.ClientboundKeepAlivePacket;
+import org.geysermc.mcprotocollib.protocol.packet.common.clientbound.ClientboundPingPacket;
+import org.geysermc.mcprotocollib.protocol.packet.common.clientbound.ClientboundStoreCookiePacket;
+import org.geysermc.mcprotocollib.protocol.packet.common.clientbound.ClientboundUpdateTagsPacket;
+import org.geysermc.mcprotocollib.protocol.packet.configuration.clientbound.ClientboundFinishConfigurationPacket;
+import org.geysermc.mcprotocollib.protocol.packet.configuration.clientbound.ClientboundRegistryDataPacket;
+import org.geysermc.mcprotocollib.protocol.packet.configuration.clientbound.ClientboundSelectKnownPacks;
+import org.geysermc.mcprotocollib.protocol.packet.configuration.clientbound.ClientboundUpdateEnabledFeaturesPacket;
+import org.geysermc.mcprotocollib.protocol.packet.configuration.serverbound.ServerboundSelectKnownPacks;
+import org.geysermc.mcprotocollib.protocol.packet.cookie.clientbound.ClientboundCookieRequestPacket;
+import org.geysermc.mcprotocollib.protocol.packet.ingame.clientbound.ClientboundLoginPacket;
+import org.geysermc.mcprotocollib.protocol.packet.ingame.clientbound.ClientboundPlayerChatPacket;
+import org.geysermc.mcprotocollib.protocol.packet.ingame.clientbound.ClientboundRespawnPacket;
+import org.geysermc.mcprotocollib.protocol.packet.ingame.clientbound.ClientboundStartConfigurationPacket;
+import org.geysermc.mcprotocollib.protocol.packet.ingame.clientbound.ClientboundTickingStatePacket;
+import org.geysermc.mcprotocollib.protocol.packet.ingame.clientbound.ClientboundTickingStepPacket;
+import org.geysermc.mcprotocollib.protocol.packet.ingame.clientbound.ClientboundCooldownPacket;
+import org.geysermc.mcprotocollib.protocol.packet.ingame.clientbound.entity.ClientboundAddEntityPacket;
+import org.geysermc.mcprotocollib.protocol.packet.ingame.clientbound.entity.ClientboundEntityPositionSyncPacket;
+import org.geysermc.mcprotocollib.protocol.packet.ingame.clientbound.entity.ClientboundMoveEntityPosPacket;
+import org.geysermc.mcprotocollib.protocol.packet.ingame.clientbound.entity.ClientboundMoveEntityPosRotPacket;
+import org.geysermc.mcprotocollib.protocol.packet.ingame.clientbound.entity.ClientboundMoveEntityRotPacket;
+import org.geysermc.mcprotocollib.protocol.packet.ingame.clientbound.entity.ClientboundMoveMinecartPacket;
+import org.geysermc.mcprotocollib.protocol.packet.ingame.clientbound.entity.ClientboundMoveVehiclePacket;
+import org.geysermc.mcprotocollib.protocol.packet.ingame.clientbound.entity.ClientboundRemoveMobEffectPacket;
+import org.geysermc.mcprotocollib.protocol.packet.ingame.clientbound.entity.ClientboundRemoveEntitiesPacket;
+import org.geysermc.mcprotocollib.protocol.packet.ingame.clientbound.entity.ClientboundSetEntityDataPacket;
+import org.geysermc.mcprotocollib.protocol.packet.ingame.clientbound.entity.ClientboundSetEntityMotionPacket;
+import org.geysermc.mcprotocollib.protocol.packet.ingame.clientbound.entity.ClientboundSetEquipmentPacket;
+import org.geysermc.mcprotocollib.protocol.packet.ingame.clientbound.entity.ClientboundSetPassengersPacket;
+import org.geysermc.mcprotocollib.protocol.packet.ingame.clientbound.entity.ClientboundTeleportEntityPacket;
+import org.geysermc.mcprotocollib.protocol.packet.ingame.clientbound.entity.ClientboundUpdateAttributesPacket;
+import org.geysermc.mcprotocollib.protocol.packet.ingame.clientbound.entity.ClientboundUpdateMobEffectPacket;
+import org.geysermc.mcprotocollib.protocol.packet.ingame.clientbound.entity.player.ClientboundPlayerAbilitiesPacket;
+import org.geysermc.mcprotocollib.protocol.packet.ingame.clientbound.entity.player.ClientboundPlayerLookAtPacket;
+import org.geysermc.mcprotocollib.protocol.packet.ingame.clientbound.entity.player.ClientboundPlayerPositionPacket;
+import org.geysermc.mcprotocollib.protocol.packet.ingame.clientbound.entity.player.ClientboundPlayerRotationPacket;
+import org.geysermc.mcprotocollib.protocol.packet.ingame.clientbound.entity.player.ClientboundSetHealthPacket;
+import org.geysermc.mcprotocollib.protocol.packet.ingame.clientbound.entity.player.ClientboundSetHeldSlotPacket;
+import org.geysermc.mcprotocollib.protocol.packet.ingame.clientbound.inventory.ClientboundContainerClosePacket;
+import org.geysermc.mcprotocollib.protocol.packet.ingame.clientbound.inventory.ClientboundContainerSetContentPacket;
+import org.geysermc.mcprotocollib.protocol.packet.ingame.clientbound.inventory.ClientboundContainerSetSlotPacket;
+import org.geysermc.mcprotocollib.protocol.packet.ingame.clientbound.inventory.ClientboundMountScreenOpenPacket;
+import org.geysermc.mcprotocollib.protocol.packet.ingame.clientbound.inventory.ClientboundOpenScreenPacket;
+import org.geysermc.mcprotocollib.protocol.packet.ingame.clientbound.inventory.ClientboundSetCursorItemPacket;
+import org.geysermc.mcprotocollib.protocol.packet.ingame.clientbound.inventory.ClientboundSetPlayerInventoryPacket;
+import org.geysermc.mcprotocollib.protocol.packet.ingame.clientbound.level.ClientboundChunkBatchFinishedPacket;
+import org.geysermc.mcprotocollib.protocol.packet.ingame.clientbound.level.ClientboundExplodePacket;
+import org.geysermc.mcprotocollib.protocol.packet.ingame.clientbound.level.ClientboundBlockUpdatePacket;
+import org.geysermc.mcprotocollib.protocol.packet.ingame.clientbound.level.ClientboundBlockEntityDataPacket;
+import org.geysermc.mcprotocollib.protocol.packet.ingame.clientbound.level.ClientboundBlockEventPacket;
+import org.geysermc.mcprotocollib.protocol.packet.ingame.clientbound.level.ClientboundForgetLevelChunkPacket;
+import org.geysermc.mcprotocollib.protocol.packet.ingame.clientbound.level.ClientboundGameEventPacket;
+import org.geysermc.mcprotocollib.protocol.packet.ingame.clientbound.level.ClientboundLevelChunkWithLightPacket;
+import org.geysermc.mcprotocollib.protocol.packet.ingame.clientbound.level.ClientboundSectionBlocksUpdatePacket;
+import org.geysermc.mcprotocollib.protocol.packet.ingame.clientbound.level.border.ClientboundInitializeBorderPacket;
+import org.geysermc.mcprotocollib.protocol.packet.ingame.clientbound.level.border.ClientboundSetBorderCenterPacket;
+import org.geysermc.mcprotocollib.protocol.packet.ingame.clientbound.level.border.ClientboundSetBorderLerpSizePacket;
+import org.geysermc.mcprotocollib.protocol.packet.ingame.clientbound.level.border.ClientboundSetBorderSizePacket;
+import org.geysermc.mcprotocollib.protocol.data.game.entity.player.PlayerAction;
+import org.geysermc.mcprotocollib.protocol.data.game.level.notify.GameEvent;
+import org.geysermc.mcprotocollib.protocol.packet.ingame.serverbound.ServerboundPlayerLoadedPacket;
+import org.geysermc.mcprotocollib.protocol.packet.ingame.serverbound.player.ServerboundMovePlayerPosPacket;
+import org.geysermc.mcprotocollib.protocol.packet.ingame.serverbound.player.ServerboundMovePlayerPosRotPacket;
+import org.geysermc.mcprotocollib.protocol.packet.ingame.serverbound.player.ServerboundMovePlayerRotPacket;
+import org.geysermc.mcprotocollib.protocol.packet.ingame.serverbound.player.ServerboundMovePlayerStatusOnlyPacket;
+import org.geysermc.mcprotocollib.protocol.packet.ingame.serverbound.player.ServerboundPlayerActionPacket;
+import org.geysermc.mcprotocollib.protocol.packet.ingame.serverbound.player.ServerboundSetCarriedItemPacket;
+import org.slf4j.Logger;
+
+
+/** Mirrors lifecycle and packet events into automation player state. */
+public final class EventHandler {
+    private final AutomationManager automationManager;
+    private final Logger logger;
+
+    public EventHandler(AutomationManager automationManager, Logger logger) {
+        this.automationManager = automationManager;
+        this.logger = logger;
+    }
+
+    @Subscribe
+    public EventTask onPlayerEnterConfiguration(PlayerEnterConfigurationEvent event) {
+        Player player = event.player();
+        return EventTask.withContinuation(continuation -> {
+            com.fakeplayerproxy.world.player.Player automationPlayer = automationManager.get(player);
+            if (automationPlayer == null) {
+                continuation.resume();
+                return;
+            }
+            // IDEA reports the borrowed EventLoop as unclosed. Velocity owns its lifecycle.
+            //noinspection resource
+            var eventLoop = automationPlayer.eventLoop();
+            eventLoop.execute(() -> {
+                withPlayer(player, (playerState, backend) ->
+                        playerState.automationService().allowConfigurationSwitch());
+                continuation.resume();
+            });
+        });
+    }
+
+    @Subscribe
+    public void onPlayerFinishedConfiguration(PlayerFinishedConfigurationEvent event) {
+        Player player = event.player();
+        com.fakeplayerproxy.world.player.Player automationPlayer = automationManager.get(player);
+        if (automationPlayer == null) {
+            return;
+        }
+        // IDEA reports the borrowed EventLoop as unclosed. Velocity owns its lifecycle.
+        //noinspection resource
+        var eventLoop = automationPlayer.eventLoop();
+        eventLoop.execute(() ->
+                withPlayer(player, (playerState, backend) ->
+                        playerState.automationService().finishConfiguration(backend)));
+    }
+
+    @Subscribe
+    public void onServerPostConnect(ServerPostConnectEvent event) {
+        if (automationManager.get(event.getPlayer()) != null) {
+            event.getPlayer().sendMessage(Component.translatable(
+                    "fakeplayerproxy.message.encryption_verified", NamedTextColor.GREEN));
+        }
+    }
+
+    @Subscribe(async = false)
+    public void onKeepAlive(ClientboundPacketEvent<ClientboundKeepAlivePacket> event) {
+        withPlayer(event, (player, backend) ->
+                player.automationService().keepAlive(backend, event.getPacket().getPingId()));
+    }
+
+    @Subscribe(async = false)
+    public void onPing(ClientboundPacketEvent<ClientboundPingPacket> event) {
+        withPlayer(event, (player, backend) ->
+                player.automationService().pong(backend, event.getPacket().getId()));
+    }
+
+    @Subscribe(async = false)
+    public void onStartConfiguration(ClientboundPacketEvent<ClientboundStartConfigurationPacket> event) {
+        withPlayer(event, (player, backend) -> player.automationService().startConfiguration());
+    }
+
+    @Subscribe(async = false)
+    public void onKnownPacks(ClientboundPacketEvent<ClientboundSelectKnownPacks> event) {
+        withPlayer(event, (player, backend) ->
+                player.automationService().offerKnownPacks(backend, event.getPacket().getKnownPacks()));
+    }
+
+    @Subscribe(async = false)
+    public void onSelectedKnownPacks(ServerboundPacketEvent<ServerboundSelectKnownPacks> event) {
+        withPlayer(event.getPlayer(), (player, backend) -> event.setPacket(
+                player.automationService().selectKnownPacks(event.getPacket().getKnownPacks())));
+    }
+
+    @Subscribe(async = false)
+    public void onRegistryData(ClientboundPacketEvent<ClientboundRegistryDataPacket> event) {
+        withPlayer(event, (player, backend) -> {
+            ClientboundRegistryDataPacket packet = event.getPacket();
+            player.world().registry(packet.getRegistry(), Decoder.instance().completeDimensionTypes(
+                    packet.getRegistry(), packet.getEntries(),
+                    player.automationService().selectedKnownPacksProvideFixedRegistry()));
+        });
+    }
+
+    @Subscribe(async = false)
+    public void onFinishConfiguration(ClientboundPacketEvent<ClientboundFinishConfigurationPacket> event) {
+        withPlayer(event, (player, backend) ->
+                player.automationService().markConfigurationFinish());
+    }
+
+    @Subscribe(async = false)
+    public void onChunkBatchFinished(ClientboundPacketEvent<ClientboundChunkBatchFinishedPacket> event) {
+        withPlayer(event, (player, backend) ->
+                player.automationService().chunkBatchFinished(backend, event.getPacket().getBatchSize()));
+    }
+
+    @Subscribe(async = false)
+    public void onStoreCookie(ClientboundPacketEvent<ClientboundStoreCookiePacket> event) {
+        withPlayer(event, (player, backend) ->
+                player.automationService().storeCookie(event.getPacket().getKey(), event.getPacket().getPayload()));
+    }
+
+    @Subscribe(async = false)
+    public void onCookieRequest(ClientboundPacketEvent<ClientboundCookieRequestPacket> event) {
+        withPlayer(event, (player, backend) ->
+                player.automationService().requestCookie(backend, event.getPacket().getKey()));
+    }
+
+    @Subscribe(async = false)
+    public void onPlayerChat(ClientboundPacketEvent<ClientboundPlayerChatPacket> event) {
+        withPlayer(event, (player, backend) ->
+                player.automationService().chat(backend, event.getPacket().getMessageSignature()));
+    }
+
+    @Subscribe(async = false)
+    public void onLogin(ClientboundPacketEvent<ClientboundLoginPacket> event) {
+        withPlayer(event, (player, backend) -> {
+            var spawnInfo = event.getPacket().getCommonPlayerSpawnInfo();
+            if (spawnInfo == null) {
+                logger.warn("Ignoring Login local-state update with missing spawn information");
+                return;
+            }
+            player.initializeGame(event.getPacket().getEntityId(), spawnInfo);
+            player.automationService().enterGame();
+        });
+    }
+
+    @Subscribe(async = false)
+    public void onRespawn(ClientboundPacketEvent<ClientboundRespawnPacket> event) {
+        withPlayer(event, (player, backend) -> {
+            ClientboundRespawnPacket packet = event.getPacket();
+            var spawnInfo = packet.getCommonPlayerSpawnInfo();
+            if (spawnInfo == null) {
+                logger.warn("Ignoring Respawn local-state update with missing spawn information");
+                return;
+            }
+            player.respawn(spawnInfo,
+                    packet.isKeepMetadata(), packet.isKeepAttributeModifiers());
+            player.automationService().resumeGame();
+        });
+    }
+
+    @Subscribe(async = false)
+    public void onContainerContent(ClientboundPacketEvent<ClientboundContainerSetContentPacket> event) {
+        withPlayer(event, (player, backend) -> player.inventory().apply(event.getPacket()));
+    }
+
+    @Subscribe(async = false)
+    public void onContainerSlot(ClientboundPacketEvent<ClientboundContainerSetSlotPacket> event) {
+        withPlayer(event, (player, backend) -> player.inventory().apply(event.getPacket()));
+    }
+
+    @Subscribe(async = false)
+    public void onPlayerInventory(ClientboundPacketEvent<ClientboundSetPlayerInventoryPacket> event) {
+        withPlayer(event, (player, backend) -> player.inventory().apply(event.getPacket()));
+    }
+
+    @Subscribe(async = false)
+    public void onCursorItem(ClientboundPacketEvent<ClientboundSetCursorItemPacket> event) {
+        withPlayer(event, (player, backend) -> player.inventory().apply(event.getPacket()));
+    }
+
+    @Subscribe(async = false)
+    public void onHeldSlot(ClientboundPacketEvent<ClientboundSetHeldSlotPacket> event) {
+        withPlayer(event, (player, backend) -> player.inventory().apply(event.getPacket()));
+    }
+
+    @Subscribe(async = false)
+    public void onOpenScreen(ClientboundPacketEvent<ClientboundOpenScreenPacket> event) {
+        withPlayer(event, (player, backend) -> player.inventory().apply(event.getPacket()));
+    }
+
+    @Subscribe(async = false)
+    public void onMountScreen(ClientboundPacketEvent<ClientboundMountScreenOpenPacket> event) {
+        withPlayer(event, (player, backend) -> player.inventory().apply(event.getPacket()));
+    }
+
+    @Subscribe(async = false)
+    public void onContainerClose(ClientboundPacketEvent<ClientboundContainerClosePacket> event) {
+        withPlayer(event, (player, backend) -> player.inventory().apply(event.getPacket()));
+    }
+
+    @Subscribe(async = false)
+    public void onTickingState(ClientboundPacketEvent<ClientboundTickingStatePacket> event) {
+        withPlayer(event, (player, backend) -> player.world().tickingState(
+                event.getPacket().getTickRate(), event.getPacket().isFrozen()));
+    }
+
+    @Subscribe(async = false)
+    public void onTickingStep(ClientboundPacketEvent<ClientboundTickingStepPacket> event) {
+        withPlayer(event, (player, backend) ->
+                player.world().tickingStep(event.getPacket().getTickSteps()));
+    }
+
+    @Subscribe(async = false)
+    public void onUpdateTags(ClientboundPacketEvent<ClientboundUpdateTagsPacket> event) {
+        withPlayer(event, (player, backend) ->
+                player.world().physicalTags(event.getPacket().getTags()));
+    }
+
+    @Subscribe(async = false)
+    public void onGameEvent(ClientboundPacketEvent<ClientboundGameEventPacket> event) {
+        ClientboundGameEventPacket packet = event.getPacket();
+        if (packet.getNotification() == GameEvent.LEVEL_CHUNKS_LOAD_START) {
+            withPlayer(event, (player, backend) -> player.world().levelChunksLoadStarted());
+        } else if (packet.getNotification() == GameEvent.CHANGE_GAME_MODE
+                && packet.getValue() instanceof org.geysermc.mcprotocollib.protocol.data.game.entity.player.GameMode gameMode) {
+            withPlayer(event, (player, backend) -> player.gameMode(gameMode));
+        }
+    }
+
+    @Subscribe(async = false)
+    public void onForgetChunk(ClientboundPacketEvent<ClientboundForgetLevelChunkPacket> event) {
+        withPlayer(event, (player, backend) ->
+                player.world().forgetChunk(event.getPacket().getX(), event.getPacket().getZ()));
+    }
+
+    @Subscribe(async = false)
+    public void onLevelChunk(ClientboundPacketEvent<ClientboundLevelChunkWithLightPacket> event) {
+        withPlayer(event, (player, backend) -> {
+            ClientboundLevelChunkWithLightPacket packet = event.getPacket();
+            var result = player.world().decodeAndInstallChunk(
+                    packet.getX(), packet.getZ(), packet.getChunkData(), packet.getBlockEntities());
+            if (!result.installed()) {
+                result.cause().ifPresentOrElse(
+                        cause -> logger.warn(
+                                "Cannot install LevelChunk at ({}, {}): {}",
+                                packet.getX(), packet.getZ(), result.detail(), cause),
+                        () -> logger.warn(
+                                "Cannot install LevelChunk at ({}, {}): {}",
+                                packet.getX(), packet.getZ(), result.detail()));
+            }
+        });
+    }
+
+    @Subscribe(async = false)
+    public void onBlockEntityData(ClientboundPacketEvent<ClientboundBlockEntityDataPacket> event) {
+        withPlayer(event, (player, backend) -> player.world().blockEntity(
+                event.getPacket().getPosition(), event.getPacket().getType(), event.getPacket().getNbt()));
+    }
+
+    @Subscribe(async = false)
+    public void onBlockEvent(ClientboundPacketEvent<ClientboundBlockEventPacket> event) {
+        withPlayer(event, (player, backend) -> {
+            ClientboundBlockEventPacket packet = event.getPacket();
+            if (packet.getType()
+                    instanceof org.geysermc.mcprotocollib.protocol.data.game.level.block.value.PistonValueType type
+                    && packet.getValue()
+                    instanceof org.geysermc.mcprotocollib.protocol.data.game.level.block.value.PistonValue value) {
+                player.world().blockEvent(packet.getPosition(), type, value.getDirection(), packet.getBlockId())
+                        .ifPresent(detail -> logger.warn("Cannot apply piston BlockEvent: {}", detail));
+            }
+        });
+    }
+
+    @Subscribe(async = false)
+    public void onBlockUpdate(ClientboundPacketEvent<ClientboundBlockUpdatePacket> event) {
+        withPlayer(event, (player, backend) ->
+                player.world().updateBlock(event.getPacket().getEntry()));
+    }
+
+    @Subscribe(async = false)
+    public void onSectionBlocksUpdate(ClientboundPacketEvent<ClientboundSectionBlocksUpdatePacket> event) {
+        withPlayer(event, (player, backend) ->
+                player.world().updateSection(event.getPacket().getEntries()));
+    }
+
+    @Subscribe(async = false)
+    public void onPlayerPosition(ClientboundPacketEvent<ClientboundPlayerPositionPacket> event) {
+        withPlayer(event, (player, backend) -> {
+            ClientboundPlayerPositionPacket packet = event.getPacket();
+            if (packet.getPosition() == null || packet.getDeltaMovement() == null) {
+                logger.warn("Ignoring PlayerPosition local-state update with missing vectors");
+                return;
+            }
+            player.applyServerPosition(packet.getPosition(), packet.getDeltaMovement(),
+                    packet.getYRot(), packet.getXRot(), packet.getRelatives());
+            player.automationService().acknowledgePosition(backend, packet.getId());
+        });
+    }
+
+    @Subscribe(async = false)
+    public void onPlayerRotation(ClientboundPacketEvent<ClientboundPlayerRotationPacket> event) {
+        withPlayer(event, (player, backend) -> {
+            ClientboundPlayerRotationPacket packet = event.getPacket();
+            player.applyServerRotation(packet.getYRot(), packet.isRelativeY(),
+                    packet.getXRot(), packet.isRelativeX());
+            player.automationService().acknowledgeRotation(backend);
+        });
+    }
+
+    @Subscribe(async = false)
+    public void onHealth(ClientboundPacketEvent<ClientboundSetHealthPacket> event) {
+        withPlayer(event, (player, backend) -> {
+            player.setHealth(event.getPacket().getHealth());
+            player.food(event.getPacket().getFood(), event.getPacket().getSaturation());
+        });
+    }
+
+    @Subscribe(async = false)
+    public void onMotion(ClientboundPacketEvent<ClientboundSetEntityMotionPacket> event) {
+        withPlayer(event, (player, backend) -> {
+            var entity = player.world().entity(event.getPacket().getEntityId());
+            if (entity != null && event.getPacket().getMovement() != null) {
+                entity.setVelocity(event.getPacket().getMovement());
+            }
+        });
+    }
+
+    @Subscribe(async = false)
+    public void onAddEntity(ClientboundPacketEvent<ClientboundAddEntityPacket> event) {
+        withPlayer(event, (player, backend) -> {
+            ClientboundAddEntityPacket packet = event.getPacket();
+            if (packet.getMovement() == null) {
+                logger.warn("Ignoring AddEntity local-state update with missing movement");
+                return;
+            }
+            player.world().addEntity(
+                    packet.getEntityId(),
+                    packet.getType(),
+                    org.cloudburstmc.math.vector.Vector3d.from(packet.getX(), packet.getY(), packet.getZ()),
+                    packet.getMovement(),
+                    packet.getYaw(),
+                    packet.getPitch());
+        });
+    }
+
+    @Subscribe(async = false)
+    public void onRemoveEntities(ClientboundPacketEvent<ClientboundRemoveEntitiesPacket> event) {
+        withPlayer(event, (player, backend) ->
+                player.world().removeEntities(event.getPacket().getEntityIds()));
+    }
+
+    @Subscribe(async = false)
+    public void onMoveEntityPos(ClientboundPacketEvent<ClientboundMoveEntityPosPacket> event) {
+        withPlayer(event, (player, backend) -> {
+            ClientboundMoveEntityPosPacket packet = event.getPacket();
+            var entity = player.world().entity(packet.getEntityId());
+            if (entity != null) {
+                boolean localAuthoritative = entity.isControlledBy(player);
+                entity.interpolate(
+                        org.cloudburstmc.math.vector.Vector3d.from(
+                                packet.getMoveX(), packet.getMoveY(), packet.getMoveZ()),
+                        true, 0.0f, 0.0f, false, localAuthoritative);
+                if (!localAuthoritative) {
+                    entity.setCollisionFlags(packet.isOnGround(), entity.horizontalCollision());
+                }
+            }
+        });
+    }
+
+    @Subscribe(async = false)
+    public void onMoveEntityRot(ClientboundPacketEvent<ClientboundMoveEntityRotPacket> event) {
+        withPlayer(event, (player, backend) -> {
+            ClientboundMoveEntityRotPacket packet = event.getPacket();
+            var entity = player.world().entity(packet.getEntityId());
+            if (entity != null) {
+                boolean localAuthoritative = entity.isControlledBy(player);
+                entity.interpolate(org.cloudburstmc.math.vector.Vector3d.ZERO,
+                        false, packet.getYaw(), packet.getPitch(), true, localAuthoritative);
+                if (!localAuthoritative) {
+                    entity.setCollisionFlags(packet.isOnGround(), entity.horizontalCollision());
+                }
+            }
+        });
+    }
+
+    @Subscribe(async = false)
+    public void onMoveEntityPosRot(ClientboundPacketEvent<ClientboundMoveEntityPosRotPacket> event) {
+        withPlayer(event, (player, backend) -> {
+            ClientboundMoveEntityPosRotPacket packet = event.getPacket();
+            var entity = player.world().entity(packet.getEntityId());
+            if (entity != null) {
+                boolean localAuthoritative = entity.isControlledBy(player);
+                entity.interpolate(
+                        org.cloudburstmc.math.vector.Vector3d.from(
+                                packet.getMoveX(), packet.getMoveY(), packet.getMoveZ()),
+                        true, packet.getYaw(), packet.getPitch(), true, localAuthoritative);
+                if (!localAuthoritative) {
+                    entity.setCollisionFlags(packet.isOnGround(), entity.horizontalCollision());
+                }
+            }
+        });
+    }
+
+    @Subscribe(async = false)
+    public void onEntityPositionSync(ClientboundPacketEvent<ClientboundEntityPositionSyncPacket> event) {
+        withPlayer(event, (player, backend) -> {
+            ClientboundEntityPositionSyncPacket packet = event.getPacket();
+            var entity = player.world().entity(packet.getId());
+            if (entity != null && packet.getPosition() != null) {
+                entity.positionSync(packet.getPosition(), packet.getYRot(), packet.getXRot(),
+                        packet.isOnGround(), entity.isControlledBy(player));
+            }
+        });
+    }
+
+    @Subscribe(async = false)
+    public void onTeleportEntity(ClientboundPacketEvent<ClientboundTeleportEntityPacket> event) {
+        withPlayer(event, (player, backend) -> {
+            ClientboundTeleportEntityPacket packet = event.getPacket();
+            var entity = player.world().entity(packet.getId());
+            if (entity != null && packet.getPosition() != null
+                    && packet.getDeltaMovement() != null) {
+                entity.teleport(packet.getPosition(), packet.getDeltaMovement(),
+                        packet.getYRot(), packet.getXRot(), packet.getRelatives(), packet.isOnGround());
+            }
+        });
+    }
+
+    @Subscribe(async = false)
+    public void onMoveVehicle(ClientboundPacketEvent<ClientboundMoveVehiclePacket> event) {
+        withPlayer(event, (player, backend) -> {
+            if (event.getPacket().getPosition() == null) {
+                logger.warn("Ignoring MoveVehicle local-state update with missing position");
+                return;
+            }
+            player.applyVehiclePosition(
+                    event.getPacket().getPosition(), event.getPacket().getYRot(), event.getPacket().getXRot());
+            player.automationService().acknowledgeVehicle(backend);
+        });
+    }
+
+    @Subscribe(async = false)
+    public void onEntityData(ClientboundPacketEvent<ClientboundSetEntityDataPacket> event) {
+        withPlayer(event, (player, backend) -> {
+            var entity = player.world().entity(event.getPacket().getEntityId());
+            if (entity != null) {
+                for (var metadata : event.getPacket().getMetadata()) {
+                    entity.applyMetadata(metadata.getId(), metadata.getValue());
+                }
+            }
+        });
+    }
+
+    @Subscribe(async = false)
+    public void onPassengers(ClientboundPacketEvent<ClientboundSetPassengersPacket> event) {
+        withPlayer(event, (player, backend) -> player.world().setPassengers(
+                event.getPacket().getEntityId(), event.getPacket().getPassengerIds()));
+    }
+
+    @Subscribe(async = false)
+    public void onAttributes(ClientboundPacketEvent<ClientboundUpdateAttributesPacket> event) {
+        withPlayer(event, (player, backend) -> {
+            var entity = player.world().entity(event.getPacket().getEntityId());
+            if (entity instanceof com.fakeplayerproxy.world.entity.LivingEntity livingEntity) {
+                livingEntity.updateAttributes(event.getPacket().getAttributes());
+            }
+        });
+    }
+
+    @Subscribe(async = false)
+    public void onEffect(ClientboundPacketEvent<ClientboundUpdateMobEffectPacket> event) {
+        withPlayer(event, (player, backend) -> {
+            var entity = player.world().entity(event.getPacket().getEntityId());
+            if (entity instanceof com.fakeplayerproxy.world.entity.LivingEntity livingEntity) {
+                livingEntity.updateEffect(event.getPacket().getEffect(), event.getPacket().getAmplifier());
+            }
+        });
+    }
+
+    @Subscribe(async = false)
+    public void onRemoveEffect(ClientboundPacketEvent<ClientboundRemoveMobEffectPacket> event) {
+        withPlayer(event, (player, backend) -> {
+            var entity = player.world().entity(event.getPacket().getEntityId());
+            if (entity instanceof com.fakeplayerproxy.world.entity.LivingEntity livingEntity) {
+                livingEntity.removeEffect(event.getPacket().getEffect());
+            }
+        });
+    }
+
+    @Subscribe(async = false)
+    public void onEquipment(ClientboundPacketEvent<ClientboundSetEquipmentPacket> event) {
+        withPlayer(event, (player, backend) -> {
+            var entity = player.world().entity(event.getPacket().getEntityId());
+            if (entity instanceof com.fakeplayerproxy.world.entity.LivingEntity livingEntity) {
+                livingEntity.updateEquipment(event.getPacket().getEquipment());
+            }
+        });
+    }
+
+    @Subscribe(async = false)
+    public void onAbilities(ClientboundPacketEvent<ClientboundPlayerAbilitiesPacket> event) {
+        withPlayer(event, (player, backend) -> player.abilities(
+                event.getPacket().isInvincible(), event.getPacket().isCanFly(),
+                event.getPacket().isFlying(), event.getPacket().isCreative()));
+    }
+
+    @Subscribe(async = false)
+    public void onCooldown(ClientboundPacketEvent<ClientboundCooldownPacket> event) {
+        withPlayer(event, (player, backend) -> player.cooldown(
+                event.getPacket().getCooldownGroup(), event.getPacket().getCooldownTicks()));
+    }
+
+    @Subscribe(async = false)
+    public void onEnabledFeatures(ClientboundPacketEvent<ClientboundUpdateEnabledFeaturesPacket> event) {
+        withPlayer(event, (player, backend) ->
+                player.enabledFeatures(event.getPacket().getFeatures()));
+    }
+
+    @Subscribe(async = false)
+    public void onMinecartSteps(ClientboundPacketEvent<ClientboundMoveMinecartPacket> event) {
+        withPlayer(event, (player, backend) -> {
+            var entity = player.world().entity(event.getPacket().getEntityId());
+            if (entity != null && entity.isMinecart()) {
+                entity.queueMinecartSteps(event.getPacket().getLerpSteps());
+            }
+        });
+    }
+
+    @Subscribe(async = false)
+    public void onLookAt(ClientboundPacketEvent<ClientboundPlayerLookAtPacket> event) {
+        withPlayer(event, (player, backend) -> {
+            ClientboundPlayerLookAtPacket packet = event.getPacket();
+            player.lookAt(packet.getOrigin(), packet.getX(), packet.getY(), packet.getZ(),
+                    packet.getTargetEntityId(), packet.getTargetEntityOrigin());
+        });
+    }
+
+    @Subscribe(async = false)
+    public void onInitializeBorder(ClientboundPacketEvent<ClientboundInitializeBorderPacket> event) {
+        withPlayer(event, (player, backend) -> {
+            ClientboundInitializeBorderPacket packet = event.getPacket();
+            player.world().border(packet.getNewCenterX(), packet.getNewCenterZ(),
+                    packet.getOldSize(), packet.getNewSize(), packet.getLerpTime());
+        });
+    }
+
+    @Subscribe(async = false)
+    public void onBorderCenter(ClientboundPacketEvent<ClientboundSetBorderCenterPacket> event) {
+        withPlayer(event, (player, backend) -> player.world().borderCenter(
+                event.getPacket().getNewCenterX(), event.getPacket().getNewCenterZ()));
+    }
+
+    @Subscribe(async = false)
+    public void onBorderSize(ClientboundPacketEvent<ClientboundSetBorderSizePacket> event) {
+        withPlayer(event, (player, backend) ->
+                player.world().borderSize(event.getPacket().getSize()));
+    }
+
+    @Subscribe(async = false)
+    public void onBorderLerp(ClientboundPacketEvent<ClientboundSetBorderLerpSizePacket> event) {
+        withPlayer(event, (player, backend) -> player.world().borderLerp(
+                event.getPacket().getOldSize(), event.getPacket().getNewSize(),
+                event.getPacket().getLerpTime()));
+    }
+
+    @Subscribe(async = false)
+    public void onExplosion(ClientboundPacketEvent<ClientboundExplodePacket> event) {
+        withPlayer(event, (player, backend) -> {
+            if (event.getPacket().getPlayerKnockback() != null) {
+                player.addVelocity(event.getPacket().getPlayerKnockback());
+            }
+        });
+    }
+
+    @Subscribe(async = false)
+    public void onPlayerLoaded(ServerboundPacketEvent<ServerboundPlayerLoadedPacket> event) {
+        withPlayer(event.getPlayer(), (player, backend) -> player.automationService().playerLoaded());
+    }
+
+    @Subscribe(async = false)
+    public void onSetCarriedItem(ServerboundPacketEvent<ServerboundSetCarriedItemPacket> event) {
+        withPlayer(event.getPlayer(), (player, backend) ->
+                player.selectedSlot(event.getPacket().getSlot()));
+    }
+
+    @Subscribe(async = false)
+    public void onPlayerAction(ServerboundPacketEvent<ServerboundPlayerActionPacket> event) {
+        if (event.getPacket().getAction() != PlayerAction.RELEASE_USE_ITEM) {
+            return;
+        }
+        withPlayer(event.getPlayer(), (player, backend) -> {
+            if (player.automationService().ownsContinuousUse()) {
+                event.cancel();
+            }
+        });
+    }
+
+    @Subscribe(async = false)
+    public void onMovePos(ServerboundPacketEvent<ServerboundMovePlayerPosPacket> event) {
+        withPlayer(event.getPlayer(), (player, backend) -> {
+            ServerboundMovePlayerPosPacket packet = event.getPacket();
+            player.clientPosition(packet.getX(), packet.getY(), packet.getZ(),
+                    packet.isOnGround(), packet.isHorizontalCollision());
+        });
+    }
+
+    @Subscribe(async = false)
+    public void onMovePosRot(ServerboundPacketEvent<ServerboundMovePlayerPosRotPacket> event) {
+        withPlayer(event.getPlayer(), (player, backend) -> {
+            ServerboundMovePlayerPosRotPacket packet = event.getPacket();
+            player.clientPosition(packet.getX(), packet.getY(), packet.getZ(),
+                    packet.isOnGround(), packet.isHorizontalCollision());
+            player.clientRotation(packet.getYaw(), packet.getPitch(),
+                    packet.isOnGround(), packet.isHorizontalCollision());
+        });
+    }
+
+    @Subscribe(async = false)
+    public void onMoveRot(ServerboundPacketEvent<ServerboundMovePlayerRotPacket> event) {
+        withPlayer(event.getPlayer(), (player, backend) -> {
+            ServerboundMovePlayerRotPacket packet = event.getPacket();
+            player.clientRotation(packet.getYaw(), packet.getPitch(),
+                    packet.isOnGround(), packet.isHorizontalCollision());
+        });
+    }
+
+    @Subscribe(async = false)
+    public void onMoveStatus(ServerboundPacketEvent<ServerboundMovePlayerStatusOnlyPacket> event) {
+        withPlayer(event.getPlayer(), (player, backend) -> {
+            ServerboundMovePlayerStatusOnlyPacket packet = event.getPacket();
+            player.clientStatus(packet.isOnGround(), packet.isHorizontalCollision());
+        });
+    }
+
+    private void withPlayer(
+            ClientboundPacketEvent<?> event,
+            BiConsumer<com.fakeplayerproxy.world.player.Player, MinecraftConnection> action) {
+        Player player = event.getPlayer();
+        com.fakeplayerproxy.world.player.Player automationPlayer = automationManager.get(player);
+        if (automationPlayer == null || !event.isSource(automationPlayer.serverConnection())) {
+            return;
+        }
+        apply(player, automationPlayer, action);
+    }
+
+    private void withPlayer(
+            Player player,
+            BiConsumer<com.fakeplayerproxy.world.player.Player, MinecraftConnection> action) {
+        com.fakeplayerproxy.world.player.Player automationPlayer = automationManager.get(player);
+        apply(player, automationPlayer, action);
+    }
+
+    private void apply(
+            Player player,
+            com.fakeplayerproxy.world.player.Player automationPlayer,
+            BiConsumer<com.fakeplayerproxy.world.player.Player, MinecraftConnection> action) {
+        if (automationPlayer == null) {
+            return;
+        }
+        try {
+            MinecraftConnection backend = automationPlayer.backendConnection();
+            if (backend != null) {
+                action.accept(automationPlayer, backend);
+            }
+        } catch (RuntimeException updateFailure) {
+            logger.error("Cannot apply synchronous packet local-state update for Velocity player {}",
+                    player.getUsername(), updateFailure);
+        }
+    }
+}

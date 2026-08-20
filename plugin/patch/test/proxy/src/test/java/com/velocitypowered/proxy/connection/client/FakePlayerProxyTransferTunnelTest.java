@@ -39,6 +39,7 @@ import com.velocitypowered.api.proxy.server.ServerInfo;
 import com.velocitypowered.proxy.VelocityServer;
 import com.velocitypowered.proxy.config.VelocityConfiguration;
 import com.velocitypowered.proxy.connection.MinecraftConnection;
+import com.velocitypowered.proxy.connection.backend.VelocityServerConnection;
 import com.velocitypowered.proxy.protocol.MinecraftPacket;
 import com.velocitypowered.proxy.protocol.ProtocolUtils;
 import com.velocitypowered.proxy.protocol.StateRegistry;
@@ -66,6 +67,11 @@ import java.util.UUID;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
 import net.kyori.adventure.text.Component;
+import org.geysermc.mcprotocollib.network.packet.PacketRegistry;
+import org.geysermc.mcprotocollib.protocol.codec.MinecraftCodec;
+import org.geysermc.mcprotocollib.protocol.data.ProtocolState;
+import org.geysermc.mcprotocollib.protocol.data.game.KnownPack;
+import org.geysermc.mcprotocollib.protocol.packet.configuration.serverbound.ServerboundSelectKnownPacks;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.core.LogEvent;
 import org.apache.logging.log4j.core.appender.AbstractAppender;
@@ -84,6 +90,38 @@ class FakePlayerProxyTransferTunnelTest {
   private static final ProtocolVersion VERSION = ProtocolVersion.MINECRAFT_26_2;
   private static final InetSocketAddress TARGET_ADDRESS =
       InetSocketAddress.createUnresolved("target.example", 25566);
+
+  @Test
+  void directPacketSendUsesTheBackendConfigurationRegistry() {
+    VelocityServer server = mock(VelocityServer.class);
+    EmbeddedChannel frontendChannel = createTargetChannel();
+    MinecraftConnection frontend = new MinecraftConnection(frontendChannel, server);
+    frontend.setProtocolVersion(VERSION);
+    frontend.setState(StateRegistry.PLAY);
+
+    EmbeddedChannel backendChannel = createTargetChannel();
+    MinecraftConnection backend = new MinecraftConnection(backendChannel, server);
+    backend.setProtocolVersion(VERSION);
+    backend.setState(StateRegistry.CONFIG);
+    ConnectedPlayer player = mock(ConnectedPlayer.class);
+    VelocityServerConnection serverConnection = mock(VelocityServerConnection.class);
+    when(serverConnection.getPlayer()).thenReturn(player);
+    when(player.getConnection()).thenReturn(frontend);
+    backend.setAssociation(serverConnection);
+
+    backend.sendPacket(new ServerboundSelectKnownPacks(
+        List.of(new KnownPack("minecraft", "core", "26.2"))));
+
+    ByteBuf frame = readFrame(backendChannel);
+    int frameLength = ProtocolUtils.readVarInt(frame);
+    assertEquals(frame.readableBytes(), frameLength);
+    PacketRegistry registry = MinecraftCodec.CODEC.getCodec(ProtocolState.CONFIGURATION);
+    assertEquals(registry.getServerboundId(ServerboundSelectKnownPacks.class),
+        ProtocolUtils.readVarInt(frame));
+    ReferenceCountUtil.release(frame);
+    frontendChannel.finishAndReleaseAll();
+    backendChannel.finishAndReleaseAll();
+  }
 
   @Test
   void coalescedBootstrapWaitsForForwardedTargetHelloBeforeRawHandoff() {

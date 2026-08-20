@@ -1,0 +1,15 @@
+{"file":".trellis/spec/language/java.md","reason":"Apply the project Java rules for state, methods, null handling, and exceptions."}
+{"file":".trellis/spec/frontend/fabric-client-mod.md","reason":"Keep the client payload and Mixin design inside the existing mod boundary."}
+{"file":".trellis/spec/backend/velocity-plugin.md","reason":"Preserve Velocity patch, EventLoop, packet, Shadow, and automation contracts."}
+{"file":".trellis/spec/backend/logging-guidelines.md","reason":"Apply the project log ownership and sensitive-data rules."}
+{"file":".trellis/spec/guides/temporary-git-state.md","reason":"Use the temporary Git cleanup and sub-agent commit boundary."}
+{"file":".trellis/tasks/08-19-auto-reconnect-research/research/feasibility-summary.md","reason":"Use the selected feasibility, authentication, CONFIG, kick, and retry decisions."}
+{"file":".trellis/tasks/08-19-auto-reconnect-research/research/client-token-and-session-auth.md","reason":"Implement the pinned authlib join contract and failure classification."}
+{"file":".trellis/tasks/08-19-auto-reconnect-research/research/velocity-shadow-reconnect-lifecycle.md","reason":"Preserve the exact ConnectedPlayer during the backend reconnect lifecycle."}
+{"file":".trellis/tasks/08-19-auto-reconnect-research/research/automation-service-reconnect-continuity.md","reason":"Preserve action intent and rebuild only backend-derived state."}
+{"file":".trellis/tasks/08-19-auto-reconnect-research/research/backend-connect-wait-list.md","reason":"Implement the common high and low backend Login priority list."}
+{"file":".trellis/tasks/08-19-auto-reconnect-research/research/kick-classification-and-token-security.md","reason":"Apply the approved denylist and credential custody boundary."}
+{"file":".trellis/tasks/08-19-auto-reconnect-research/research/retry-and-priority-policy.md","reason":"Use the approved delays, stop rules, and real-player priority."}
+{"file":".trellis/tasks/08-19-auto-reconnect-research/research/auto-reconnect-surface-design.md","reason":"Use the approved command, payload, file, translation, and UI surfaces."}
+{"file":".trellis/tasks/08-19-auto-reconnect-research/research/auto-reconnect-logging.md","reason":"Implement the required lifecycle logs without credential leakage."}
+{"file": ".trellis/tasks/08-19-auto-reconnect-research/research/headless-config-response-failure.md", "reason": "Use the live CONFIG failure evidence and required encoder boundary."}

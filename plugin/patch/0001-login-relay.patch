@@ -612,10 +612,10 @@ index 14884af4670fe30b00ee580ea3d65fc7f6056068..d2c8bfc12b5f3c031a8f1f2f19020f8e
 +
  }
 diff --git a/proxy/src/main/java/com/velocitypowered/proxy/connection/client/AuthSessionHandler.java b/proxy/src/main/java/com/velocitypowered/proxy/connection/client/AuthSessionHandler.java
-index fee642b495fbcd95b25b34da696c7b5f14747b5d..b5c5f46a78b88c455b48074282b378236d0cccca 100644
+index fee642b495fbcd95b25b34da696c7b5f14747b5d..ec9ed0bad17437a012ded54ff50dfc657e4d846b 100644
 --- a/proxy/src/main/java/com/velocitypowered/proxy/connection/client/AuthSessionHandler.java
 +++ b/proxy/src/main/java/com/velocitypowered/proxy/connection/client/AuthSessionHandler.java
-@@ -1,295 +1,474 @@
+@@ -1,295 +1,469 @@
  /*
   * Copyright (C) 2018-2023 Velocity Contributors
   *
@@ -670,7 +670,6 @@ index fee642b495fbcd95b25b34da696c7b5f14747b5d..b5c5f46a78b88c455b48074282b37823
  import java.util.Optional;
  import java.util.UUID;
  import java.util.concurrent.CompletableFuture;
-+import java.util.concurrent.TimeUnit;
  import net.kyori.adventure.text.Component;
  import net.kyori.adventure.text.format.NamedTextColor;
  import org.apache.logging.log4j.LogManager;
@@ -1034,16 +1033,12 @@ index fee642b495fbcd95b25b34da696c7b5f14747b5d..b5c5f46a78b88c455b48074282b37823
 +
 +    mcConnection.setActiveSessionHandler(StateRegistry.CONFIG,
 +        new ClientConfigSessionHandler(server, connectedPlayer));
-+    // The provisional and raw target connections share Paper's source-IP throttle.
-+    // The provisional backend is already closed before this continuation; waiting the full
-+    // default four seconds prevents the second handshake from entering Paper's throttle window.
 +    server.getEventManager().fire(new PostLoginEvent(connectedPlayer))
 +        .thenRunAsync(() -> {
 +          if (!mcConnection.isClosed()) {
 +            connectedPlayer.transferToHost(transferAddress);
 +          }
-+        }, CompletableFuture.delayedExecutor(
-+            4, TimeUnit.SECONDS, mcConnection.eventLoop()))
++        }, mcConnection.eventLoop())
 +        .exceptionallyAsync(exception -> {
 +          logger.error("Exception before Transfer for {}", connectedPlayer, exception);
 +          if (!mcConnection.isClosed()) {

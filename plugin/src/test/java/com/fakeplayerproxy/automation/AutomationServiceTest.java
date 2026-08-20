@@ -1,6 +1,7 @@
 package com.fakeplayerproxy.automation;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertDoesNotThrow;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertInstanceOf;
 import static org.junit.jupiter.api.Assertions.assertTrue;
@@ -14,6 +15,7 @@ import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 import static org.mockito.Mockito.doReturn;
+import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.inOrder;
 
 import com.fakeplayerproxy.utils.Result;
@@ -23,6 +25,7 @@ import com.fakeplayerproxy.world.player.Player;
 import com.velocitypowered.proxy.connection.MinecraftConnection;
 import com.velocitypowered.proxy.connection.backend.VelocityServerConnection;
 import com.velocitypowered.proxy.connection.client.ConnectedPlayer;
+import com.velocitypowered.api.proxy.ConnectionRequestBuilder;
 import io.netty.channel.Channel;
 import io.netty.channel.EventLoop;
 import io.netty.buffer.ByteBuf;
@@ -67,6 +70,8 @@ final class AutomationServiceTest {
     private final MinecraftConnection backend = mock(MinecraftConnection.class);
     private final EventLoop eventLoop = mock(EventLoop.class);
     private final Channel channel = mock(Channel.class);
+    private final ConnectedPlayer velocityPlayer = mock(ConnectedPlayer.class);
+    private final VelocityServerConnection serverConnection = mock(VelocityServerConnection.class);
     private final Player player = player();
     private final AutomationService service = player.automationService();
 
@@ -87,6 +92,25 @@ final class AutomationServiceTest {
                 new RegistryEntry(Key.key("minecraft", "plains"), NbtMap.EMPTY)));
         player.initializeGame(17, spawnInfo());
         service.enterGame();
+        service.playerLoaded();
+    }
+
+    @Test
+    void successfulConnectionThatEndsBeforeReadyPlaySchedulesAnotherAttempt() {
+        prepareLoadedWorld();
+        assertTrue(service.shadow().join());
+        service.enableAutoReconnect(new byte[]{1});
+        ConnectionRequestBuilder.Result result = mock(ConnectionRequestBuilder.Result.class);
+        when(result.isSuccessful()).thenReturn(true);
+        when(velocityPlayer.reconnectShadow(eq(serverConnection), any(byte[].class)))
+                .thenReturn(java.util.concurrent.CompletableFuture.completedFuture(result));
+        when(channel.isActive()).thenReturn(false);
+
+        assertTrue(service.prepareReconnect());
+        org.junit.jupiter.api.Assertions.assertNull(service.tickReconnect());
+        assertInstanceOf(IllegalStateException.class, service.tickReconnect());
+        assertEquals(1, service.getReconnectAttempt());
+        assertEquals(10L, service.nextReconnectDelaySeconds());
     }
 
     @Test
@@ -128,6 +152,7 @@ final class AutomationServiceTest {
         when(owner.attack(backend, true)).thenReturn(new Result.Success<>(false));
         AutomationService scheduler = new AutomationService(owner);
         scheduler.enterGame();
+        scheduler.playerLoaded();
 
         scheduler.attack(ActionMode.INTERVAL, 1);
         scheduler.tick(backend);
@@ -152,6 +177,7 @@ final class AutomationServiceTest {
         when(owner.stopActions(backend)).thenReturn(new Result.Success<>(null));
         AutomationService scheduler = new AutomationService(owner);
         scheduler.enterGame();
+        scheduler.playerLoaded();
         scheduler.use(ActionMode.ONCE, 0);
         scheduler.attack(ActionMode.ONCE, 0);
 
@@ -179,6 +205,7 @@ final class AutomationServiceTest {
         when(owner.use(backend)).thenReturn(new Result.Success<>(true));
         AutomationService scheduler = new AutomationService(owner);
         scheduler.enterGame();
+        scheduler.playerLoaded();
         scheduler.attack(ActionMode.ONCE, 0);
 
         scheduler.tick(backend);
@@ -223,6 +250,7 @@ final class AutomationServiceTest {
     @Test
     void dismountHoldsShiftForOneCompleteServiceTickThenRestoresCurrentInput() {
         prepareLoadedWorld();
+        service.playerLoaded();
         player.setInputState(Player.InputState.CLEAR.withMovement("forward"));
 
         assertInstanceOf(Result.Success.class, service.dismount());
@@ -333,14 +361,24 @@ final class AutomationServiceTest {
         service.offerKnownPacks(backend, List.of(core));
 
         verify(backend).sendPacket(argThat(packet -> packet instanceof ServerboundSelectKnownPacks selected
-                && selected.getKnownPacks().equals(List.of(core))), eq(false));
+                && selected.getKnownPacks().equals(List.of(core))), eq(true));
 
         clearInvocations(backend);
         service.offerKnownPacks(backend, List.of(
                 core, new KnownPack("example", "extension", "1")));
 
         verify(backend).sendPacket(argThat(packet -> packet instanceof ServerboundSelectKnownPacks selected
-                && selected.getKnownPacks().isEmpty()), eq(false));
+                && selected.getKnownPacks().isEmpty()), eq(true));
+    }
+
+    @Test
+    void responseWriteFailureDoesNotEscapeTheOwningEventLoop() {
+        service.shadow();
+        doThrow(new IllegalArgumentException("test encoding failure"))
+                .when(backend).sendPacket(any(ServerboundSelectKnownPacks.class), eq(true));
+
+        assertDoesNotThrow(() -> service.offerKnownPacks(
+                backend, List.of(new KnownPack("minecraft", "core", "26.2"))));
     }
 
     @Test
@@ -422,6 +460,7 @@ final class AutomationServiceTest {
 
         service.markConfigurationFinish();
         service.finishConfiguration(backend);
+        service.playerLoaded();
         service.tick(backend);
 
         verify(backend).sendPacket(ServerboundFinishConfigurationPacket.INSTANCE, false);
@@ -636,12 +675,10 @@ final class AutomationServiceTest {
     }
 
     private Player player() {
-        ConnectedPlayer velocityPlayer = mock(ConnectedPlayer.class);
         when(velocityPlayer.getUniqueId()).thenReturn(UUID.randomUUID());
         MinecraftConnection frontend = mock(MinecraftConnection.class);
         when(velocityPlayer.getConnection()).thenReturn(frontend);
         when(frontend.eventLoop()).thenReturn(eventLoop);
-        VelocityServerConnection serverConnection = mock(VelocityServerConnection.class);
         when(velocityPlayer.getConnectionInFlightOrConnectedServer()).thenReturn(serverConnection);
         when(serverConnection.getConnection()).thenReturn(backend);
         return new Player(velocityPlayer);

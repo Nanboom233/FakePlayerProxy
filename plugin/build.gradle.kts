@@ -23,6 +23,7 @@ val velocityBasePropertiesFile = layout.projectDirectory.file("patch/velocity-ba
 val velocityPatchFiles = fileTree(layout.projectDirectory.dir("patch")) {
     include("0001-login-relay.patch")
     include("0002-automation-extension.patch")
+    include("0003-login-session.patch")
 }
 val velocityPatchTests = layout.projectDirectory.dir("patch/test")
 val velocityCommit = requireNotNull(Properties().apply {

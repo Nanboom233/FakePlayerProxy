@@ -4,7 +4,10 @@
   "compatibilityLevel": "JAVA_25",
   "mixins": [],
   "client": [
-    "MixinClientHandshakePacketListenerImpl"
+    "MixinClientHandshakePacketListenerImpl",
+    "MixinClientboundCustomPayloadPacket",
+    "MixinServerboundCustomPayloadPacket",
+    "MixinClientPacketListener"
   ],
   "injectors": {
     "defaultRequire": 1

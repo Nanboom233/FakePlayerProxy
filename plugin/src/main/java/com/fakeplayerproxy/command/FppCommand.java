@@ -4,6 +4,7 @@ import static com.velocitypowered.api.command.BrigadierCommand.literalArgumentBu
 import static com.velocitypowered.api.command.BrigadierCommand.requiredArgumentBuilder;
 
 import com.fakeplayerproxy.utils.PermissionProvider;
+import com.fakeplayerproxy.utils.AuthManager;
 import com.fakeplayerproxy.utils.Result;
 import com.mojang.brigadier.arguments.StringArgumentType;
 import com.mojang.brigadier.context.CommandContext;
@@ -24,18 +25,27 @@ public final class FppCommand {
     private final ProxyServer server;
     private final PermissionProvider permissionProvider;
     private final Logger logger;
+    private final AuthManager authManager;
 
     public FppCommand(
             @NotNull ProxyServer server,
             @NotNull PermissionProvider permissionProvider,
+            @NotNull AuthManager authManager,
             @NotNull Logger logger) {
         this.server = server;
         this.permissionProvider = permissionProvider;
+        this.authManager = authManager;
         this.logger = logger;
     }
 
     public BrigadierCommand create() {
         var root = literalArgumentBuilder("fpp");
+        root.then(literalArgumentBuilder("auto-reconnect")
+                .requires(Player.class::isInstance)
+                .then(literalArgumentBuilder("on")
+                        .executes(context -> authManager.request((Player) context.getSource()) ? 1 : 0))
+                .then(literalArgumentBuilder("off")
+                        .executes(context -> authManager.disable((Player) context.getSource()) ? 1 : 0)));
         root.then(literalArgumentBuilder("op")
                 .requires(source -> source.hasPermission(PermissionProvider.OP_PERMISSION))
                 .then(requiredArgumentBuilder("player", StringArgumentType.word())

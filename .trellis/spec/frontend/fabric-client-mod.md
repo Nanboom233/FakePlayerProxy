@@ -34,8 +34,9 @@
   the AES key, ciphers, digest, proxy key, and challenge already prepared by
   Minecraft. Packet-envelope helpers remain under `packets`; hooks remain under
   `mixins`.
-- Do not add custom-payload codec Mixins for this login relay. The selected
-  protocol uses only `ClientboundHelloPacket` and `ServerboundKeyPacket`.
+- The login relay uses only `ClientboundHelloPacket` and `ServerboundKeyPacket`.
+  Auto-reconnect separately uses narrow clientbound and serverbound PLAY codec
+  Mixins for `fakeplayerproxy:auto_reconnect_v1`.
 
 ## 3. Contracts
 
@@ -96,6 +97,15 @@
   online-backend switching.
 - Never persist or log AES secrets, access tokens, or profile credentials. Clear
   temporary secret state when its owning connection ends.
+- Every auto-reconnect request opens a new `AutoReconnectConsentScreen` from
+  the Mod `gui` package. This class extends Vanilla `ConfirmScreen` and owns
+  only its text and boolean choice callback.
+- `MixinClientPacketListener` owns the connection, token access, response send,
+  and previous-screen restoration. Allow sends the current Minecraft access
+  token. Decline and Escape send an empty token.
+- The request has no nonce, pending state, timer, or saved consent decision.
+- The auto-reconnect request is empty. Its response is one VarInt byte length
+  followed by at most 8192 UTF-8 token bytes. The Mod retains no token after send.
 - Do not add a custom Minecraft version check; Fabric Loader owns incompatible
   version rejection.
 - Comments are part of the implementation contract. They are not a formatting

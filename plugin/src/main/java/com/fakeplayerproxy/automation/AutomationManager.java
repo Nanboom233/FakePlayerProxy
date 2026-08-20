@@ -4,7 +4,18 @@ import com.fakeplayerproxy.utils.Result;
 import com.fakeplayerproxy.world.player.Player;
 import com.velocitypowered.proxy.connection.MinecraftConnection;
 import com.velocitypowered.proxy.connection.client.ConnectedPlayer;
+import com.velocitypowered.api.event.EventTask;
+import com.velocitypowered.api.event.Continuation;
+import com.velocitypowered.api.event.Subscribe;
+import com.velocitypowered.api.event.connection.ClientboundPacketEvent;
+import com.velocitypowered.api.event.connection.DisconnectEvent;
+import com.velocitypowered.api.event.connection.PostLoginEvent;
+import com.mojang.authlib.exceptions.ForcedUsernameChangeException;
+import com.mojang.authlib.exceptions.InsufficientPrivilegesException;
+import com.mojang.authlib.exceptions.InvalidCredentialsException;
+import com.mojang.authlib.exceptions.UserBannedException;
 import io.netty.channel.EventLoop;
+import io.netty.buffer.ByteBufUtil;
 
 import java.util.ArrayList;
 import java.util.List;
@@ -15,6 +26,12 @@ import java.util.concurrent.TimeUnit;
 
 import org.slf4j.Logger;
 import org.jetbrains.annotations.NotNull;
+import net.kyori.adventure.text.TranslatableComponent;
+import org.geysermc.mcprotocollib.protocol.packet.common.clientbound.ClientboundDisconnectPacket;
+import org.geysermc.mcprotocollib.protocol.packet.login.clientbound.ClientboundLoginDisconnectPacket;
+import org.geysermc.mcprotocollib.protocol.packet.common.clientbound.ClientboundResourcePackPushPacket;
+import org.geysermc.mcprotocollib.protocol.packet.configuration.clientbound.ClientboundCodeOfConductPacket;
+import org.geysermc.mcprotocollib.protocol.packet.common.clientbound.ClientboundTransferPacket;
 
 /** Owns registration, replacement, tick scheduling, and removal of Plugin players. */
 public final class AutomationManager {
@@ -79,6 +96,12 @@ public final class AutomationManager {
                     oldEventLoop.execute(() -> {
                         try {
                             MinecraftConnection oldBackend = oldPlayer.backendConnection();
+                            if (oldPlayer.automationService().isAutoReconnect()) {
+                                logger.info(
+                                        "Auto-reconnect session for {} ({}) on backend {} was replaced by a fresh login.",
+                                        oldVelocityPlayer.getUsername(), oldVelocityPlayer.getUniqueId(),
+                                        backendName(oldPlayer));
+                            }
                             oldPlayer.automationService().close();
                             if (oldBackend == null) {
                                 close.complete(null);
@@ -154,6 +177,48 @@ public final class AutomationManager {
         return result;
     }
 
+    @Subscribe
+    public EventTask onPostLogin(PostLoginEvent event) {
+        return EventTask.withContinuation(continuation ->
+                register(event.getPlayer()).whenComplete((ignored, failure) -> {
+                    if (failure == null) {
+                        continuation.resume();
+                    } else {
+                        continuation.resumeWithException(failure);
+                    }
+                }));
+    }
+
+    @Subscribe
+    public EventTask onDisconnect(DisconnectEvent event) {
+        com.velocitypowered.api.proxy.Player velocityPlayer = event.getPlayer();
+        Player player = get(velocityPlayer);
+        if (player == null) {
+            return EventTask.withContinuation(Continuation::resume);
+        }
+        return EventTask.withContinuation(continuation -> {
+            try {
+                // IDEA reports the borrowed EventLoop as unclosed. Velocity owns its lifecycle.
+                //noinspection resource
+                var eventLoop = player.eventLoop();
+                eventLoop.execute(() -> {
+                    if (players.get(velocityPlayer) == player
+                            && player.automationService().isShadow()) {
+                        event.cancel();
+                        if (player.automationService().isAutoReconnect()) {
+                            logger.info("Auto-reconnect activated for Shadow {} ({}) on backend {}.",
+                                    velocityPlayer.getUsername(), velocityPlayer.getUniqueId(),
+                                    backendName(player));
+                        }
+                    }
+                    continuation.resume();
+                });
+            } catch (RuntimeException submissionFailure) {
+                continuation.resumeWithException(submissionFailure);
+            }
+        });
+    }
+
     public Player get(com.velocitypowered.api.proxy.Player player) {
         return players.get(player);
     }
@@ -184,19 +249,107 @@ public final class AutomationManager {
         if (!player.automationService().isShadow()) {
             return new Result.Failure<>("fakeplayerproxy.command.kill_requires_shadow");
         }
-        if (!players.remove(player.velocityPlayer(), player)) {
+        logger.warn("Auto-reconnect disabled for {} ({}) on backend {}: player kill.",
+                player.velocityPlayer().getUsername(), player.velocityPlayer().getUniqueId(),
+                backendName(player));
+        if (!terminalClose(player.velocityPlayer(), player)) {
             return new Result.Failure<>("fakeplayerproxy.command.automation_unavailable");
-        }
-        MinecraftConnection backend = player.backendConnection();
-        player.automationService().close();
-        if (backend != null) {
-            backend.close();
         }
         return new Result.Success<>(null);
     }
 
+    @Subscribe(async = false)
+    public void onDisconnectPacket(ClientboundPacketEvent<ClientboundDisconnectPacket> event) {
+        terminalDisconnect(event, event.getPacket().getReason());
+    }
+
+    @Subscribe(async = false)
+    public void onLoginDisconnectPacket(
+            ClientboundPacketEvent<ClientboundLoginDisconnectPacket> event) {
+        terminalDisconnect(event, event.getPacket().getReason());
+    }
+
+    @Subscribe(async = false)
+    public void onResourcePack(ClientboundPacketEvent<ClientboundResourcePackPushPacket> event) {
+        Player player = currentPlayer(event);
+        if (player == null || !player.automationService().isAutoReconnect()
+                || !event.getPacket().isRequired()) {
+            return;
+        }
+        if (player.velocityPlayer() instanceof ConnectedPlayer connectedPlayer) {
+            try {
+                if (connectedPlayer.resourcePackHandler()
+                        .hasPackAppliedByHash(ByteBufUtil.decodeHexDump(
+                        event.getPacket().getHash()))) {
+                    return;
+                }
+            } catch (IllegalArgumentException ignored) {
+                // A malformed required-pack hash cannot identify a pack already applied by the client.
+            }
+        }
+        logger.warn("Auto-reconnect disabled for {} ({}) on backend {}: required resource pack.",
+                event.getPlayer().getUsername(), event.getPlayer().getUniqueId(),
+                backendName(player));
+        terminalClose(event.getPlayer(), player);
+    }
+
+    @Subscribe(async = false)
+    public void onCodeOfConduct(ClientboundPacketEvent<ClientboundCodeOfConductPacket> event) {
+        terminalPacket(event, "Code of Conduct");
+    }
+
+    @Subscribe(async = false)
+    public void onTransfer(ClientboundPacketEvent<ClientboundTransferPacket> event) {
+        terminalPacket(event, "backend Transfer");
+    }
+
+    private void terminalDisconnect(
+            ClientboundPacketEvent<?> event,
+            net.kyori.adventure.text.Component reason) {
+        com.velocitypowered.api.proxy.Player velocityPlayer = event.getPlayer();
+        Player player = currentPlayer(event);
+        if (player == null) {
+            return;
+        }
+        String key = reason instanceof TranslatableComponent translated
+                ? translated.key() : "backend kick";
+        if (!"multiplayer.disconnect.duplicate_login".equals(key)
+                && !"multiplayer.disconnect.banned.reason".equals(key)
+                && !"multiplayer.disconnect.banned_ip.reason".equals(key)) {
+            if (player.automationService().isAutoReconnect()) {
+                logger.warn("Auto-reconnect received a retryable backend kick for {} ({}) on backend {}: backend kick.",
+                        velocityPlayer.getUsername(), velocityPlayer.getUniqueId(),
+                        backendName(player));
+            }
+            return;
+        }
+        terminalPacket(event, key);
+    }
+
+    private void terminalPacket(ClientboundPacketEvent<?> event, String category) {
+        com.velocitypowered.api.proxy.Player velocityPlayer = event.getPlayer();
+        Player player = currentPlayer(event);
+        if (player == null) {
+            return;
+        }
+        if (!player.automationService().isAutoReconnect()) {
+            return;
+        }
+        logger.warn("Auto-reconnect disabled for {} ({}) on backend {}: {}.",
+                velocityPlayer.getUsername(), velocityPlayer.getUniqueId(),
+                backendName(player), category);
+        terminalClose(velocityPlayer, player);
+    }
+
+    private Player currentPlayer(ClientboundPacketEvent<?> event) {
+        Player player = get(event.getPlayer());
+        return player != null && event.isSource(player.serverConnection()) ? player : null;
+    }
+
     private static boolean isActive(@NotNull Player player) {
-        return !player.automationService().isClosed() && player.backendConnection() != null;
+        AutomationService service = player.automationService();
+        return !service.isClosed() && (player.backendConnection() != null
+                || service.isShadow() && service.isAutoReconnect());
     }
 
     private void tick(
@@ -210,47 +363,112 @@ public final class AutomationManager {
             }
             MinecraftConnection backend = player.backendConnection();
             if (backend == null) {
-                if (players.remove(velocityPlayer, player)) {
+                if (service.isShadow() && service.isAutoReconnect()) {
+                    boolean backendLost = service.prepareReconnect();
+                    String backendName = backendName(player);
+                    if (backendLost) {
+                        logger.info("Auto-reconnect backend loss for {} ({}) on backend {} scheduled an immediate attempt.",
+                                velocityPlayer.getUsername(), velocityPlayer.getUniqueId(), backendName);
+                    }
+                    int previousAttempt = service.getReconnectAttempt();
+                    Throwable reconnectFailure = service.tickReconnect();
+                    if (service.getReconnectAttempt() > previousAttempt) {
+                        logger.info("Auto-reconnect attempt {} for {} ({}) started on backend {}.",
+                                service.getReconnectAttempt(), velocityPlayer.getUsername(),
+                                velocityPlayer.getUniqueId(), backendName);
+                    }
+                    if (reconnectFailure != null) {
+                        if (reconnectFailure instanceof InvalidCredentialsException
+                                || reconnectFailure instanceof UserBannedException
+                                || reconnectFailure instanceof ForcedUsernameChangeException
+                                || reconnectFailure instanceof InsufficientPrivilegesException) {
+                            logger.warn("Auto-reconnect disabled for {} ({}) on backend {}: credential rejection.",
+                                    velocityPlayer.getUsername(), velocityPlayer.getUniqueId(),
+                                    backendName);
+                            terminalClose(velocityPlayer, player);
+                        } else {
+                            logger.warn("Auto-reconnect attempt {} for {} ({}) failed during backend Login on backend {}: retryable failure. Next attempt in {} seconds.",
+                                    service.getReconnectAttempt(), velocityPlayer.getUsername(),
+                                    velocityPlayer.getUniqueId(), backendName,
+                                    service.nextReconnectDelaySeconds());
+                        }
+                    }
+                } else if (players.remove(velocityPlayer, player)) {
                     service.close();
                 }
                 return;
             }
+            int activeAttempt = service.getReconnectAttempt();
             service.tick(backend);
+            if (activeAttempt > 0 && service.getReconnectAttempt() == 0) {
+                logger.info("Auto-reconnect reached ready PLAY for {} ({}) on backend {} after attempt {}. Automation resumed.",
+                        velocityPlayer.getUsername(), velocityPlayer.getUniqueId(),
+                        backendName(player), activeAttempt);
+            }
         } catch (RuntimeException tickFailure) {
-            logger.error("Cannot tick automation for Velocity player {}",
-                    velocityPlayer.getUsername(), tickFailure);
-            players.remove(velocityPlayer, player);
-            try {
-                service.close();
-            } catch (RuntimeException closeFailure) {
-                logger.error("Cannot close failed automation for Velocity player {}",
-                        velocityPlayer.getUsername(), closeFailure);
-            }
-            try {
-                MinecraftConnection backend = player.backendConnection();
-                if (backend != null) {
-                    backend.close();
-                }
-            } catch (RuntimeException backendCloseFailure) {
-                logger.error("Cannot close backend for failed automation player {}",
-                        velocityPlayer.getUsername(), backendCloseFailure);
-            }
+            logger.error("Auto-reconnect controller failed for {} ({}) during attempt {}.",
+                    velocityPlayer.getUsername(), velocityPlayer.getUniqueId(),
+                    service.getReconnectAttempt(), tickFailure);
+            terminalClose(velocityPlayer, player);
         }
     }
 
     public void shutdown() {
         players.forEach((velocityPlayer, player) -> {
-            if (players.remove(velocityPlayer, player)) {
-                try {
-                    // IDEA reports the borrowed EventLoop as unclosed. Velocity owns its lifecycle.
-                    //noinspection resource
-                    var eventLoop = player.eventLoop();
-                    eventLoop.execute(player.automationService()::close);
-                } catch (RuntimeException shutdownFailure) {
-                    logger.error("Cannot submit automation shutdown for Velocity player {}",
-                            velocityPlayer.getUsername(), shutdownFailure);
-                }
+            try {
+                // IDEA reports the borrowed EventLoop as unclosed. Velocity owns its lifecycle.
+                //noinspection resource
+                var eventLoop = player.eventLoop();
+                eventLoop.execute(() -> {
+                    if (player.automationService().isAutoReconnect()) {
+                        logger.info("Auto-reconnect session for {} ({}) on backend {} was cleared during plugin shutdown.",
+                                velocityPlayer.getUsername(), velocityPlayer.getUniqueId(),
+                                backendName(player));
+                    }
+                    terminalClose(velocityPlayer, player);
+                });
+            } catch (RuntimeException shutdownFailure) {
+                logger.error("Cannot submit automation shutdown for Velocity player {}",
+                        velocityPlayer.getUsername(), shutdownFailure);
             }
         });
+    }
+
+    private boolean terminalClose(
+            @NotNull com.velocitypowered.api.proxy.Player velocityPlayer,
+            @NotNull Player player) {
+        MinecraftConnection backend = player.backendConnection();
+        var serverConnection = player.serverConnection();
+        try {
+            player.automationService().disableAutoReconnect();
+        } catch (RuntimeException disableFailure) {
+            logger.error("Auto-reconnect terminal cleanup could not cancel reconnect work for {} ({}).",
+                    velocityPlayer.getUsername(), velocityPlayer.getUniqueId(), disableFailure);
+        }
+        if (!players.remove(velocityPlayer, player)) {
+            return false;
+        }
+        try {
+            player.automationService().close();
+        } catch (RuntimeException closeFailure) {
+            logger.error("Auto-reconnect terminal cleanup could not close the retained service for {} ({}).",
+                    velocityPlayer.getUsername(), velocityPlayer.getUniqueId(), closeFailure);
+        }
+        try {
+            if (backend != null) {
+                backend.close();
+            } else if (serverConnection != null) {
+                serverConnection.disconnect();
+            }
+        } catch (RuntimeException backendCloseFailure) {
+            logger.error("Auto-reconnect terminal cleanup could not close reconnect work for {} ({}).",
+                    velocityPlayer.getUsername(), velocityPlayer.getUniqueId(), backendCloseFailure);
+        }
+        return true;
+    }
+
+    private static String backendName(@NotNull Player player) {
+        var connection = player.serverConnection();
+        return connection == null ? "unavailable" : connection.getServerInfo().getName();
     }
 }

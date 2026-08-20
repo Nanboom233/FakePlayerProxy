@@ -83,8 +83,26 @@
   connection field. All mutable state is accessed on that player's connection EventLoop.
 - The protocol version is compile-time pinned. Do not add a runtime protocol,
   target, username, or reconnect configuration surface.
-- Shadow never creates a second backend connection and does not reconnect or copy
-  connection secrets.
+- An explicitly authorized Shadow can replace one dead same-target backend.
+  The exact Plugin Player, World, AutomationService, actions, input intent, map
+  entry, and tick task remain. Backend-derived state is cleared and rebuilt.
+- A headless Shadow CONFIG response uses the backend protocol registry. The
+  retained frontend can remain in PLAY and cannot select that response registry.
+- The backend EventLoop owns reconnect response writes. A response write catches
+  and logs its failure before the failure can leave the EventLoop.
+- `AutomationService.autoReconnect` is the only feature state. Progress derives
+  from the backend connection, one reconnect future, `inGame`, and
+  `playerLoaded`; there is no pending state or reconnect phase.
+- Retry starts immediately, then waits 10, 10, 30, 30, 60, 60, and repeated 300
+  seconds. Ready PLAY resets the sequence. Real-player Login channels take
+  priority over Shadow reconnect channels at the common backend output gate.
+- The Minecraft access token stays only in the retained service and is cleared
+  on disable, kill, terminal packet/authentication policy, replacement, shutdown,
+  or final close. Token content, length, hashes, and credential-bearing failures
+  are never logged.
+- A terminal auto-reconnect close first disables the feature and cancels reconnect
+  work. It then clears retry state, overwrites the token, removes the exact manager
+  entry, and closes the retained service and backend connection.
 - `/player shadow` uses its exact command source. `/player as <player> shadow`
   resolves an active automation player by case-insensitive authenticated name.
   Ordinary actions attach to both paths. `jump`, `move`, `sprint`, `unsprint`,
@@ -584,8 +602,20 @@ Local player movement remains in the later shadow-only branch.
   clients, and one fixed online-mode target server.
 - Scope: `plugin/patch/*.patch` is the Velocity patch set. The set can contain
   more than one patch file. Patch files contain no test source.
-- Each patch file owns one complete function. Do not group patches by changed
+- Each patch file owns one complete product feature. Do not group patches by changed
   file, task, or development date.
+- A product feature can be delivered, reviewed, and reverted as one unit. A
+  method, class, packet path, or internal capability is not a product feature.
+- One feature patch can change multiple classes and include all capabilities
+  that the feature needs. `0003-login-session.patch` owns auto-reconnect. This
+  includes source identity, Login priority, token-backed Login, same-target
+  reconnect, and headless CONFIG.
+- One behavior has one patch owner. A later patch cannot delete, replace, or
+  reimplement behavior introduced by an earlier patch.
+- If a requirement changes an earlier feature, update its owning patch. Then
+  regenerate each later patch against the new applied baseline.
+- A later feature patch can extend an earlier API when its feature needs the
+  extension. It cannot undo the earlier feature.
 - An accepted Mod connection uses the direct packet relay. Its client-generated
   AES secret lets Velocity decrypt and proxy both protected streams. A Vanilla
   or declined Mod connection completes a short first login, reconnects through
@@ -603,7 +633,7 @@ Local player movement remains in the later shadow-only branch.
   `MinecraftConnection.sendPacket(Packet, boolean)` and cancellable `DisconnectEvent`.
 - Velocity patch set: `plugin/patch/*.patch`, applied in ascending file-name
   order.
-- Patch file name: `<sequence>-<function>.patch`.
+- Patch file name: `<sequence>-<feature>.patch`.
 
 - IntelliJ IDEA exposes only `server/releaseJar` and `server/runServer`, invoking
   `:plugin:releaseJar` and `:plugin:runServer` respectively.
@@ -655,8 +685,10 @@ Local player movement remains in the later shadow-only branch.
   `RSA_target(originalChallenge)`, write that standard response to the target,
   and enable backend AES only after the write. Frontend and backend use the same
   key bytes with independent cipher state.
-- Do not call Mojang session services from Velocity and never receive an access
-  token. The real client performs the sole target session join.
+- The initial relay path does not call Mojang session services or receive an
+  access token. The real client performs that target session join. An authorized
+  Shadow auto-reconnect is the separate token-backed exception defined by the
+  FakePlayerProxy runtime scenario above.
 - Target Login Success is authoritative for UUID, username, properties, and the
   Minecraft 26.2 session ID. Pause backend reads until frontend Login Success is
   acknowledged, asynchronous `PostLoginEvent` handling has completed, and client
@@ -728,9 +760,9 @@ Local player movement remains in the later shadow-only branch.
   source in a Velocity patch file.
 - Keep all test source outside the Velocity patch set. A production change can
   use a separate numbered patch file instead of changing an existing patch.
-- Group patch hunks by function. Keep all production hunks for one function in
+- Group patch hunks by product feature. Keep all production hunks for one feature in
   the same patch file, even when they change multiple Velocity classes.
-- Put independent functions in separate patch files. Do not use one patch file
+- Put independent product features in separate patch files. Do not use one patch file
   as a chronological record of unrelated changes.
 - Apply all patch files in ascending file-name order. Do not treat one named
   patch file as the complete patch boundary.
@@ -804,13 +836,19 @@ Local player movement remains in the later shadow-only branch.
 | `/player shadow` has an active backend and false shadow state | Set shadow state, disconnect frontend, and keep the backend connection |
 | `/player shadow` has no active backend or shadow state is already true | Return false and keep the current connection state |
 | Shadow backend receives keepalive | Reply on the same backend connection and consume the packet |
-| Shadow backend disconnects | Exact service tick observes inactive backend and closes the service |
+| Shadow backend disconnects without auto-reconnect authorization | Exact service tick observes inactive backend and closes the service |
+| Authorized Shadow backend disconnects | Retain the exact service and start the approved same-target reconnect policy |
+| Headless CONFIG responds while the retained frontend remains in PLAY | Encode the response with the backend CONFIG registry |
+| A reconnect response write throws on the backend EventLoop | Log the operation and contain the failure inside that EventLoop |
+| A terminal auto-reconnect condition occurs | Disable and clear reconnect state before exact manager removal and connection close |
 | Fresh login replaces the same UUID before the old close callback | Keep the fresh registration because removal matches both UUID and value |
 | Connection owning relay state ends | Clear target key/challenge and temporary `K` state |
 | A patch hunk has no direct approved requirement | Remove the hunk from its patch file |
 | The patch directory contains multiple patch files | Apply all patch files in ascending file-name order |
-| One patch file contains independent functions | Split it into one patch file for each function |
-| One function changes multiple Velocity classes | Keep those hunks in the same function patch |
+| One patch file contains independent product features | Split it into one patch file for each product feature |
+| One product feature changes multiple Velocity classes | Keep those hunks in the same feature patch |
+| One feature needs packet, Login, queue, and CONFIG changes | Keep these internal capabilities in the same feature patch |
+| A later patch deletes or replaces code added by an earlier patch | Reject the later hunk and update the owning patch |
 | A patch file adds or changes test source | Reject the patch file until the test change is outside the patch set |
 
 ### 5. Good/Base/Bad Cases
@@ -825,10 +863,23 @@ Local player movement remains in the later shadow-only branch.
   the relay, and one future barrier joins the two configuration prerequisites.
 - Good: one numbered patch keeps the base relay change, and a later numbered
   patch adds an independent production change.
+- Good: `0003-login-session.patch` owns complete auto-reconnect behavior across all required Velocity classes.
+- Good: one feature patch contains internal capabilities that cannot deliver the feature alone.
+- Bad: one patch adds a delay and a later patch removes that delay.
+- Bad: unrelated product features share one patch only because development used
+  the same task or date.
 - Good: one patched `velocityHost` artifact supplies Velocity and its bundled
   runtime APIs to Plugin compilation without duplicate module versions.
 - Good: an accepted Mod player runs `/player shadow`, the frontend connection
   closes, and the same backend connection continues through keepalive packets.
+- Good: a headless Known Packs response uses the backend CONFIG registry while
+  the retained frontend remains in PLAY.
+- Bad: a headless CONFIG response selects its registry from the retained
+  frontend state.
+- Good: terminal cleanup overwrites the access token before exact manager
+  removal and connection close.
+- Bad: terminal cleanup removes the manager entry while reconnect work still
+  owns a token or future.
 - Good: the player uses a fresh login after the shadow backend closes. The new
   registration has new input state and scheduled actions.
 - Base: the mod connects to an unpatched server; login bytes and behavior remain vanilla.
@@ -878,6 +929,11 @@ Local player movement remains in the later shadow-only branch.
   replacement with exact Player/service removal.
 - `BackendPlaySessionHandler` tests cover the existing frontend branch and the
   continuation branch for keepalive, backend disconnect, and ordinary packet consume.
+- A focused encoding test keeps the retained frontend in PLAY and the backend in
+  CONFIG. It sends `ServerboundSelectKnownPacks` through the production response
+  path and verifies successful CONFIG encoding.
+- An automation test makes a reconnect response write fail. It verifies that the
+  owning EventLoop contains the failure.
 - Keep these tests outside `plugin/patch/*.patch`. No patch file can add or
   change upstream test source.
 - Do not add dedicated tests for field shape, source text,
@@ -897,6 +953,22 @@ Local player movement remains in the later shadow-only branch.
 - Do not repeat full-scope checks for an equivalent narrow edit.
 
 ### 7. Wrong vs Correct
+
+#### Wrong: Frontend Registry For Headless CONFIG
+
+```java
+backend.sendPacket(packet, false);
+```
+
+This path selects the registry from the retained frontend state.
+
+#### Correct: Backend Registry For Headless CONFIG
+
+```java
+backend.sendPacket(packet, true);
+```
+
+This path uses the backend state for the headless CONFIG response.
 
 #### Wrong
 
@@ -956,7 +1028,7 @@ plugin/patch/0001-login-relay.patch
 plugin/patch/0002-automation-connection.patch
 ```
 
-Each patch owns one function. The build applies the patch files in file-name
+Each patch owns one product feature. The build applies the patch files in file-name
 order. Test source stays outside the Velocity patch set.
 
 #### Wrong: Independent Relay Flags

@@ -4,12 +4,16 @@ import com.fakeplayerproxy.utils.Result;
 import com.fakeplayerproxy.world.entity.Entity;
 import com.fakeplayerproxy.world.player.Player;
 import com.velocitypowered.proxy.connection.MinecraftConnection;
+import com.velocitypowered.proxy.connection.backend.VelocityServerConnection;
+import com.velocitypowered.proxy.connection.client.ConnectedPlayer;
+import com.velocitypowered.api.proxy.ConnectionRequestBuilder;
 import io.netty.util.concurrent.ScheduledFuture;
 import it.unimi.dsi.fastutil.Pair;
 import lombok.Getter;
 import net.kyori.adventure.text.Component;
 
 import java.util.EnumMap;
+import java.util.Arrays;
 import java.util.EnumSet;
 import java.util.HashMap;
 import java.util.HashSet;
@@ -17,6 +21,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.CompletionException;
 import java.util.function.Function;
 
 import org.geysermc.mcprotocollib.network.packet.Packet;
@@ -36,9 +41,12 @@ import org.geysermc.mcprotocollib.protocol.packet.ingame.serverbound.player.Serv
 import org.geysermc.mcprotocollib.protocol.packet.ingame.serverbound.player.ServerboundMovePlayerRotPacket;
 import org.cloudburstmc.math.vector.Vector3d;
 import org.jetbrains.annotations.NotNull;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 /** Mutable state for one authenticated relay connection. Access is restricted to its EventLoop. */
 public final class AutomationService {
+    private static final Logger logger = LoggerFactory.getLogger(AutomationService.class);
     private static final int CHAT_ACK_BATCH_SIZE = 65;
     private static final Set<KnownPack> SUPPORTED_KNOWN_PACKS = Set.of(
             new KnownPack("minecraft", "core", "26.2"));
@@ -63,6 +71,13 @@ public final class AutomationService {
     private boolean shadow;
     @Getter
     private boolean closed;
+    @Getter
+    private boolean autoReconnect;
+    private byte[] accessToken;
+    @Getter
+    private int reconnectAttempt;
+    private long nextReconnectNanos;
+    private CompletableFuture<ConnectionRequestBuilder.Result> reconnectFuture;
 
     public AutomationService(@NotNull Player owner) {
         this.owner = owner;
@@ -81,7 +96,9 @@ public final class AutomationService {
         initialPosition = false;
         waitingConfigurationFinish = false;
         clientTickAccumulatorMillis = 0.0;
-        scheduledActions.clear();
+        if (reconnectFuture == null) {
+            scheduledActions.clear();
+        }
     }
 
     public void resumeGame() {
@@ -97,7 +114,10 @@ public final class AutomationService {
         pendingChatSignatures.clear();
         offeredKnownPacks = List.of();
         selectedKnownPacks = List.of();
-        scheduledActions.clear();
+        if (reconnectFuture == null) {
+            scheduledActions.clear();
+            owner.setInputState(Player.InputState.CLEAR);
+        }
         scheduledUseCooldown = 0;
         owner.resetForConfiguration();
         clientTickAccumulatorMillis = 0.0;
@@ -133,7 +153,7 @@ public final class AutomationService {
         offeredKnownPacks = copyPacks(knownPacks);
         if (shadow) {
             selectedKnownPacks = selectOfferedPacks(offeredKnownPacks);
-            respond(backend, new ServerboundSelectKnownPacks(selectedKnownPacks), false);
+            respond(backend, new ServerboundSelectKnownPacks(selectedKnownPacks), true);
         }
     }
 
@@ -183,6 +203,109 @@ public final class AutomationService {
 
     public void playerLoaded() {
         playerLoaded = true;
+        if (reconnectFuture != null) {
+            reconnectFuture = null;
+            reconnectAttempt = 0;
+            nextReconnectNanos = 0L;
+        }
+    }
+
+    public void enableAutoReconnect(byte @NotNull [] token) {
+        disableAutoReconnect();
+        accessToken = token.clone();
+        autoReconnect = true;
+    }
+
+    public void disableAutoReconnect() {
+        autoReconnect = false;
+        nextReconnectNanos = 0L;
+        if (reconnectFuture != null && !reconnectFuture.isDone()) {
+            reconnectFuture.cancel(false);
+        }
+        reconnectFuture = null;
+        if (accessToken != null) {
+            Arrays.fill(accessToken, (byte) 0);
+            accessToken = null;
+        }
+    }
+
+    /** Clears data owned by the lost backend while preserving action and input intent. */
+    public boolean prepareReconnect() {
+        boolean backendStateWasReady = inGame || initialPosition || playerLoaded;
+        inGame = false;
+        initialPosition = false;
+        playerLoaded = false;
+        pendingConfigurationSwitch = false;
+        waitingConfigurationFinish = false;
+        pendingChatSignatures.clear();
+        offeredKnownPacks = List.of();
+        selectedKnownPacks = List.of();
+        scheduledUseCooldown = 0;
+        clientTickAccumulatorMillis = 0.0;
+        owner.resetForConfiguration();
+        return backendStateWasReady;
+    }
+
+    public long nextReconnectDelaySeconds() {
+        return switch (reconnectAttempt) {
+            case 1, 2 -> 10L;
+            case 3, 4 -> 30L;
+            case 5, 6 -> 60L;
+            default -> 300L;
+        };
+    }
+
+    /** Polls or starts one reconnect attempt and returns only a completed failure cause. */
+    public Throwable tickReconnect() {
+        if (!shadow || !autoReconnect || closed || accessToken == null) {
+            return null;
+        }
+        if (reconnectFuture != null) {
+            if (!reconnectFuture.isDone()) {
+                return null;
+            }
+            try {
+                ConnectionRequestBuilder.Result result = reconnectFuture.join();
+                if (result.isSuccessful()) {
+                    reconnectFuture = null;
+                    nextReconnectNanos = System.nanoTime()
+                            + java.util.concurrent.TimeUnit.SECONDS.toNanos(
+                            nextReconnectDelaySeconds());
+                    return new IllegalStateException(
+                            "Backend reconnect ended before ready PLAY");
+                }
+                reconnectFuture = null;
+                nextReconnectNanos = System.nanoTime()
+                        + java.util.concurrent.TimeUnit.SECONDS.toNanos(
+                        nextReconnectDelaySeconds());
+                return new IllegalStateException(
+                        "Backend reconnect completed with status " + result.getStatus());
+            } catch (CompletionException failure) {
+                reconnectFuture = null;
+                nextReconnectNanos = System.nanoTime()
+                        + java.util.concurrent.TimeUnit.SECONDS.toNanos(
+                        nextReconnectDelaySeconds());
+                return failure.getCause() == null ? failure : failure.getCause();
+            } catch (java.util.concurrent.CancellationException ignored) {
+                reconnectFuture = null;
+                return null;
+            }
+        }
+        if (System.nanoTime() < nextReconnectNanos) {
+            return null;
+        }
+        VelocityServerConnection expected = owner.serverConnection();
+        if (expected == null || !(owner.velocityPlayer() instanceof ConnectedPlayer player)) {
+            return null;
+        }
+        reconnectAttempt++;
+        byte[] token = accessToken.clone();
+        try {
+            reconnectFuture = player.reconnectShadow(expected, token);
+        } finally {
+            Arrays.fill(token, (byte) 0);
+        }
+        return null;
     }
 
     public void acknowledgeVehicle(MinecraftConnection backend) {
@@ -352,20 +475,25 @@ public final class AutomationService {
             backend.sendPacket(new ServerboundConfigurationAcknowledgedPacket(), false);
             inGame = false;
         }
-        if (inGame) {
-            owner.passiveTick();
+        if (!backend.getChannel().isActive()) {
+            return;
         }
-        EnumSet<ScheduledAction> completed = runScheduledActions(backend);
-
-        if (shadow && inGame) {
-            if (!playerLoaded
-                    && initialPosition
+        if (shadow && inGame && !playerLoaded) {
+            if (initialPosition
                     && owner.world().isLevelChunksLoadStarted()
                     && owner.world().currentPlayerChunkLoaded(
                     owner.position().getX(), owner.position().getZ())) {
                 backend.sendPacket(ServerboundPlayerLoadedPacket.INSTANCE);
-                playerLoaded = true;
+                playerLoaded();
             }
+        }
+        if (!inGame || !playerLoaded) {
+            return;
+        }
+        owner.passiveTick();
+        EnumSet<ScheduledAction> completed = runScheduledActions(backend);
+
+        if (shadow) {
             clientTickAccumulatorMillis += 50.0;
             double cadence = owner.world().clientTickCadenceMillis();
             if (clientTickAccumulatorMillis + 1.0E-7 >= cadence) {
@@ -392,7 +520,20 @@ public final class AutomationService {
         var eventLoop = backend.eventLoop();
         eventLoop.execute(() -> {
             if (!closed && shadow && backend.getChannel().isActive()) {
-                backend.sendPacket(packet, bypass);
+                try {
+                    backend.sendPacket(packet, bypass);
+                } catch (Throwable writeFailure) {
+                    var velocityPlayer = owner.velocityPlayer();
+                    var serverConnection = owner.serverConnection();
+                    var serverInfo = serverConnection == null
+                            ? null
+                            : serverConnection.getServerInfo();
+                    String backendName = serverInfo == null ? "unavailable" : serverInfo.getName();
+                    logger.error(
+                            "Auto-reconnect response write failed for {} ({}) on backend {} during {} at attempt {}.",
+                            velocityPlayer.getUsername(), velocityPlayer.getUniqueId(), backendName,
+                            packet.getClass().getSimpleName(), reconnectAttempt, writeFailure);
+                }
             }
         });
     }
@@ -501,7 +642,7 @@ public final class AutomationService {
             return new Result.Failure<>("fakeplayerproxy.command.automation_unavailable");
         }
         MinecraftConnection backend = owner.backendConnection();
-        if (closed || !inGame || backend == null) {
+        if (closed || !inGame || !playerLoaded || backend == null) {
             return new Result.Failure<>("fakeplayerproxy.command.automation_unavailable");
         }
         return action.apply(backend);
@@ -520,6 +661,7 @@ public final class AutomationService {
             return;
         }
         closed = true;
+        disableAutoReconnect();
         shadow = false;
         scheduledActions.clear();
         scheduledUseCooldown = 0;

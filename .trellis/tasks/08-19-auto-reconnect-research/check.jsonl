@@ -1,0 +1,15 @@
+{"file":".trellis/spec/language/java.md","reason":"Check all changed Java against the project language rules."}
+{"file":".trellis/spec/frontend/fabric-client-mod.md","reason":"Check client payload, Mixin, consent, and credential handling."}
+{"file":".trellis/spec/backend/velocity-plugin.md","reason":"Check Velocity patch, packet identity, EventLoop, Shadow, and automation behavior."}
+{"file":".trellis/spec/backend/quality-guidelines.md","reason":"Check backend code quality and focused behavior coverage."}
+{"file":".trellis/spec/backend/logging-guidelines.md","reason":"Check log levels, fields, and forbidden credential content."}
+{"file":".trellis/spec/guides/temporary-git-state.md","reason":"Check temporary Git cleanup and confirm that sub-agents create no commits."}
+{"file":".trellis/tasks/08-19-auto-reconnect-research/research/feasibility-summary.md","reason":"Check the complete implementation against selected product decisions."}
+{"file":".trellis/tasks/08-19-auto-reconnect-research/research/client-token-and-session-auth.md","reason":"Check the authlib join sequence and terminal exception set."}
+{"file":".trellis/tasks/08-19-auto-reconnect-research/research/automation-service-reconnect-continuity.md","reason":"Check object continuity, state reset, freeze, and ready PLAY."}
+{"file":".trellis/tasks/08-19-auto-reconnect-research/research/backend-connect-wait-list.md","reason":"Check priority order, pending-write ownership, and close cleanup."}
+{"file":".trellis/tasks/08-19-auto-reconnect-research/research/kick-classification-and-token-security.md","reason":"Check terminal policy, autoReconnect state, and token cleanup."}
+{"file":".trellis/tasks/08-19-auto-reconnect-research/research/retry-and-priority-policy.md","reason":"Check retry delay and priority behavior."}
+{"file":".trellis/tasks/08-19-auto-reconnect-research/research/auto-reconnect-surface-design.md","reason":"Check the command, payload, UI, text, and file boundaries."}
+{"file":".trellis/tasks/08-19-auto-reconnect-research/research/auto-reconnect-logging.md","reason":"Check lifecycle coverage and credential-safe messages."}
+{"file": ".trellis/tasks/08-19-auto-reconnect-research/research/headless-config-response-failure.md", "reason": "Verify the real CONFIG encoder path and EventLoop containment."}
