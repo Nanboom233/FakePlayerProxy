@@ -1,0 +1,5 @@
+{"_example": "Fill with {\"file\": \"<path>\", \"reason\": \"<why>\"}. Put spec/research files only — no code paths. Run `python .trellis/scripts/get_context.py --mode packages` to list available specs. Delete this line once real entries are added."}
+{"file": ".trellis/spec/language/java.md", "reason": "Apply Java language and safety contracts"}
+{"file": ".trellis/spec/backend/velocity-plugin.md", "reason": "Preserve Velocity patch and runtime contracts"}
+{"file": ".trellis/spec/frontend/fabric-client-mod.md", "reason": "Align Mod Java 25 code with client contracts"}
+{"file": ".trellis/tasks/08-20-velocity-java25-upgrade/research/velocity-c1cd71a4-java25.md", "reason": "Use the approved Velocity and Java 25 research"}
